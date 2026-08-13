@@ -37,7 +37,7 @@ export default function UploadForm() {
       const text = ev.target?.result as string
       const cols = parseColumns(text)
       setColumns(cols)
-      setTargetColumn(cols[cols.length - 1] || '')
+      setTargetColumn('')   // Force explicit selection
       setStep('configure')
     }
     reader.readAsText(f)
@@ -113,12 +113,13 @@ export default function UploadForm() {
         <>
           {/* Target Column */}
           <div className="mb-4">
-            <label className="label">Target Column (what you want to predict)</label>
+            <label className="label">Target Column <span style={{ color: 'var(--error)' }}>*</span> <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(what you want to predict)</span></label>
             <select
               className="input"
               value={targetColumn}
               onChange={e => setTargetColumn(e.target.value)}
             >
+              <option value="" disabled>— Select target column —</option>
               {columns.map(col => (
                 <option key={col} value={col}>{col}</option>
               ))}
@@ -156,7 +157,7 @@ export default function UploadForm() {
 
           <button
             onClick={handleSubmit}
-            disabled={loading}
+            disabled={loading || !targetColumn}
             className="btn-primary w-full"
             style={{ padding: '12px 20px' }}
           >
