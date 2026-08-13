@@ -51,7 +51,7 @@ def process_job(job):
 
         # 4. Train Model
         print(f"Training model {model_type}...")
-        local_model_path, metrics = train_and_evaluate(X, y, model_type, str(job_id))
+        local_model_path, metrics, features_schema = train_and_evaluate(X, y, model_type, str(job_id))
         
         # 5. Upload Model to Supabase Storage
         remote_model_path = f"{job_id}.joblib"
@@ -64,11 +64,12 @@ def process_job(job):
             )
 
         # 6. Update Database
-        print("Updating database with metrics...")
+        print("Updating database with metrics and features schema...")
         supabase.table("training_jobs").update({
             "status": "ready",
             "metrics": metrics,
-            "model_path": remote_model_path
+            "model_path": remote_model_path,
+            "features": features_schema
         }).eq("id", job_id).execute()
 
         # 7. Delete remote dataset (Privacy constraint)

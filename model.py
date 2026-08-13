@@ -5,7 +5,6 @@ from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
-from preprocessing import build_preprocessor
 
 def get_model(model_type):
     """
@@ -74,9 +73,24 @@ def train_and_evaluate(df_X, y, model_type, model_id, save_dir='./temp_models'):
         metrics['rmse'] = float(mean_squared_error(y_test, y_pred, squared=False))
         metrics['r2_score'] = float(r2_score(y_test, y_pred))
 
-    # 5. Save Pipeline
+    # 5. Extract Feature Schema for Frontend
+    features_schema = []
+    for col in preprocessor.keep_columns_:
+        if col in preprocessor.label_encoders_:
+            features_schema.append({
+                "name": col,
+                "type": "categorical",
+                "categories": preprocessor.label_encoders_[col].classes_.tolist()
+            })
+        else:
+            features_schema.append({
+                "name": col,
+                "type": "numeric"
+            })
+
+    # 6. Save Pipeline
     pipeline = ModelPipeline(preprocessor, model)
     model_path = os.path.join(save_dir, f"{model_id}.joblib")
     joblib.dump(pipeline, model_path)
 
-    return model_path, metrics
+    return model_path, metrics, features_schema

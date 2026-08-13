@@ -82,12 +82,18 @@ def predict(model_id: str, request: PredictionRequest):
             "prediction": prediction.tolist()[0]
         }
         
-        if hasattr(pipeline.named_steps['model'], 'predict_proba'):
-            probabilities = pipeline.predict_proba(df_features)
-            # Find the max probability for the predicted class
-            max_prob = probabilities.max(axis=1)[0]
-            result["probability"] = float(max_prob)
-            
+        if hasattr(pipeline.model, 'predict_proba'):
+            # Some preprocessors/models might fail predict_proba if classes are weird, handle gracefully
+            try:
+                # We need to process X first before calling predict_proba on the internal model
+                X_processed = pipeline.preprocessor.transform(df_features)
+                probabilities = pipeline.model.predict_proba(X_processed)
+                # Find the max probability for the predicted class
+                max_prob = probabilities.max(axis=1)[0]
+                result["probability"] = float(max_prob)
+            except Exception as e:
+                pass
+                
         return result
         
     except Exception as e:

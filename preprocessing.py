@@ -165,7 +165,7 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
     # ------------------------------------------------------------------
     def fit_transform(self, X, y):
         """Full training pipeline including row removal. Returns (X_processed, y_processed)."""
-        df = pd.DataFrame(X).copy()
+        df = pd.DataFrame(X).copy().reset_index(drop=True)
         y = pd.Series(y).reset_index(drop=True)
 
         # 1. Replace missing markers
