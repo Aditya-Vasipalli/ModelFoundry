@@ -41,16 +41,19 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         collinearity_threshold: float = 0.85,
         outlier_z: float = 3.0,
         is_regression: bool = False,
+        max_categories: int = 20,
     ):
         self.corr_threshold = corr_threshold
         self.collinearity_threshold = collinearity_threshold
         self.outlier_z = outlier_z
         self.is_regression = is_regression
+        self.max_categories = max_categories
 
         # Learned state (populated by fit_transform)
         self.label_encoders_: dict = {}
         self.impute_values_: dict = {}
         self.keep_columns_: list = []
+        self.dropped_high_cardinality_: list = []
         self.scaler_ = MinMaxScaler()
         self.power_transformer_ = PowerTransformer(method='yeo-johnson') if is_regression else None
 
@@ -61,7 +64,7 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         return df.replace(MISSING_MARKERS, np.nan)
 
     # ------------------------------------------------------------------
-    # Step 2: Encode all categorical columns
+    # Step 2: Encode all categorical columns (Drop high cardinality)
     # ------------------------------------------------------------------
     def _encode_categoricals(self, df: pd.DataFrame, fit: bool) -> pd.DataFrame:
         df = df.copy()
@@ -69,11 +72,20 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
 
         for col in cat_cols:
             if fit:
-                le = LabelEncoder()
-                # Fit only on non-null values cast to str
                 non_null_vals = df[col].dropna().astype(str).unique()
+                if len(non_null_vals) > self.max_categories:
+                    self.dropped_high_cardinality_.append(col)
+                    df.drop(columns=[col], inplace=True)
+                    continue
+                
+                le = LabelEncoder()
                 le.fit(non_null_vals)
                 self.label_encoders_[col] = le
+            
+            if not fit and hasattr(self, 'dropped_high_cardinality_') and col in self.dropped_high_cardinality_:
+                if col in df.columns:
+                    df.drop(columns=[col], inplace=True)
+                continue
 
             le = self.label_encoders_.get(col)
             if le is None:
