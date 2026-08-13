@@ -1,7 +1,7 @@
 # For full config options, see: https://supabase.com/docs/guides/local-development/cli/config
 
 [project]
-id = "your-project-ref" # Replace with your actual project ref from Supabase dashboard URL
+id = "ssoiivivgstwafszvzcz" 
 
 [api]
 enabled = true
