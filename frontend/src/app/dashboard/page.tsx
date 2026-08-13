@@ -1,7 +1,21 @@
 import { createClient } from '@/utils/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import { revalidatePath } from 'next/cache'
 import { TrainingJob, ClassificationMetrics, RegressionMetrics } from '@/types'
+
+async function deleteJob(formData: FormData) {
+  'use server'
+  const id = formData.get('id') as string
+  const supabase = await createClient()
+  
+  // Try to delete from storage first (optional, ignores error if it doesn't exist)
+  await supabase.storage.from('models').remove([`${id}.joblib`])
+  
+  // Delete from database
+  await supabase.from('training_jobs').delete().eq('id', id)
+  revalidatePath('/dashboard')
+}
 
 function StatusBadge({ status }: { status: TrainingJob['status'] }) {
   return (
@@ -121,6 +135,16 @@ export default async function DashboardPage() {
                       Open Predictor →
                     </Link>
                   )}
+                  <form action={deleteJob}>
+                    <input type="hidden" name="id" value={job.id} />
+                    <button 
+                      type="submit" 
+                      className="btn-ghost" 
+                      style={{ padding: '8px 16px', fontSize: '13px', color: 'var(--error)' }}
+                    >
+                      Delete
+                    </button>
+                  </form>
                 </div>
               </div>
             ))}

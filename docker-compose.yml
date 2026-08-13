@@ -2,7 +2,6 @@ services:
   worker:
     build: .
     image: modelfoundry-worker
-    container_name: ml-worker
     ports:
       - "8000:8000"
     env_file:
