@@ -6,6 +6,12 @@ export type ModelType =
 
 export type JobStatus = 'pending' | 'processing' | 'ready' | 'failed'
 
+export interface FeatureSchema {
+  name: string
+  type: 'numeric' | 'categorical'
+  categories?: string[]
+}
+
 export interface TrainingJob {
   id: string
   user_id: string
@@ -17,6 +23,7 @@ export interface TrainingJob {
   model_path: string | null
   metrics: ClassificationMetrics | RegressionMetrics | null
   error_message: string | null
+  features: FeatureSchema[] | null
   created_at: string
   updated_at: string
 }

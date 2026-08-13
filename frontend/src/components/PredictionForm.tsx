@@ -1,38 +1,41 @@
 'use client'
 
 import { useState } from 'react'
+import { FeatureSchema } from '@/types'
 
 interface PredictionFormProps {
   modelId: string
   isClassification: boolean
+  features: FeatureSchema[] | null
 }
 
-export default function PredictionForm({ modelId, isClassification }: PredictionFormProps) {
-  const [inputs, setInputs] = useState<Record<string, string>>({})
-  const [newKey, setNewKey] = useState('')
-  const [newVal, setNewVal] = useState('')
-  const [fields, setFields] = useState<string[]>([])
+export default function PredictionForm({ modelId, features }: PredictionFormProps) {
+  // Initialize state with default values based on the schema
+  const getInitialState = () => {
+    const initialState: Record<string, string> = {}
+    if (features) {
+      features.forEach(f => {
+        initialState[f.name] = f.type === 'categorical' && f.categories?.length ? f.categories[0] : ''
+      })
+    }
+    return initialState
+  }
+
+  const [inputs, setInputs] = useState<Record<string, string>>(getInitialState())
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ prediction: unknown; probability?: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const addField = () => {
-    if (!newKey.trim()) return
-    setFields(prev => [...prev, newKey.trim()])
-    setInputs(prev => ({ ...prev, [newKey.trim()]: newVal.trim() }))
-    setNewKey('')
-    setNewVal('')
-  }
-
-  const handlePredict = async () => {
+  const handlePredict = async (e: React.FormEvent) => {
+    e.preventDefault()
     setLoading(true)
     setError(null)
     setResult(null)
 
     // Convert numeric strings to numbers
-    const features: Record<string, string | number> = {}
+    const payloadFeatures: Record<string, string | number> = {}
     for (const [k, v] of Object.entries(inputs)) {
-      features[k] = isNaN(Number(v)) ? v : Number(v)
+      payloadFeatures[k] = isNaN(Number(v)) ? v : Number(v)
     }
 
     try {
@@ -40,7 +43,7 @@ export default function PredictionForm({ modelId, isClassification }: Prediction
       const res = await fetch(`${apiUrl}/api/v1/models/${modelId}/predict`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ features }),
+        body: JSON.stringify({ features: payloadFeatures }),
       })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
@@ -52,79 +55,76 @@ export default function PredictionForm({ modelId, isClassification }: Prediction
     }
   }
 
+  if (!features || features.length === 0) {
+    return (
+      <div className="glass p-6 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+        No feature schema available. Please wait for the model to finish training or re-train it.
+      </div>
+    )
+  }
+
   return (
     <div className="glass p-6">
       <h2 className="text-lg font-bold mb-1" style={{ color: 'var(--text-primary)' }}>Make a Prediction</h2>
       <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
-        Add features by name and value, then click Predict.
+        Fill out the required features below. The model automatically excluded any irrelevant or highly correlated columns.
       </p>
 
-      {/* Add fields */}
-      <div className="flex gap-2 mb-4">
-        <input
-          className="input flex-1"
-          placeholder="Feature name (e.g. age)"
-          value={newKey}
-          onChange={e => setNewKey(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && addField()}
-        />
-        <input
-          className="input flex-1"
-          placeholder="Value (e.g. 32)"
-          value={newVal}
-          onChange={e => setNewVal(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && addField()}
-        />
-        <button className="btn-ghost" onClick={addField} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
-          + Add
-        </button>
-      </div>
-
-      {/* Feature list */}
-      {fields.length > 0 && (
-        <div className="flex flex-col gap-2 mb-6">
-          {fields.map(field => (
-            <div key={field} className="flex items-center gap-3 p-3 rounded-xl"
-              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-              <span className="text-sm font-medium flex-1" style={{ color: 'var(--text-secondary)' }}>{field}</span>
-              <input
-                className="input"
-                style={{ width: '140px' }}
-                value={inputs[field] ?? ''}
-                onChange={e => setInputs(prev => ({ ...prev, [field]: e.target.value }))}
-              />
-              <button
-                onClick={() => {
-                  setFields(prev => prev.filter(f => f !== field))
-                  setInputs(prev => { const n = { ...prev }; delete n[field]; return n })
-                }}
-                style={{ color: 'var(--error)', fontSize: '18px', background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}
-              >×</button>
+      <form onSubmit={handlePredict}>
+        <div className="flex flex-col gap-4 mb-6">
+          {features.map(field => (
+            <div key={field.name} className="flex flex-col gap-1">
+              <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                {field.name}
+              </label>
+              {field.type === 'categorical' && field.categories ? (
+                <select
+                  className="input"
+                  value={inputs[field.name]}
+                  onChange={e => setInputs(prev => ({ ...prev, [field.name]: e.target.value }))}
+                  required
+                >
+                  <option value="" disabled>Select {field.name}</option>
+                  {field.categories.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="number"
+                  step="any"
+                  className="input"
+                  placeholder={`Enter ${field.name}...`}
+                  value={inputs[field.name]}
+                  onChange={e => setInputs(prev => ({ ...prev, [field.name]: e.target.value }))}
+                  required
+                />
+              )}
             </div>
           ))}
         </div>
-      )}
 
-      {error && (
-        <div className="mb-4 p-3 rounded-lg text-sm"
-          style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)', color: 'var(--error)' }}>
-          {error}
-        </div>
-      )}
+        {error && (
+          <div className="mb-4 p-3 rounded-lg text-sm"
+            style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)', color: 'var(--error)' }}>
+            {error}
+          </div>
+        )}
 
-      <button
-        onClick={handlePredict}
-        disabled={loading || fields.length === 0}
-        className="btn-primary w-full"
-        style={{ padding: '12px 20px' }}
-      >
-        {loading ? (
-          <>
-            <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />
-            Predicting...
-          </>
-        ) : '⚡ Predict'}
-      </button>
+        <button
+          type="submit"
+          disabled={loading}
+          className="btn-primary w-full"
+          style={{ padding: '12px 20px' }}
+        >
+          {loading ? (
+            <>
+              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block mr-2" />
+              Predicting...
+            </>
+          ) : '⚡ Predict'}
+        </button>
+      </form>
 
       {/* Result */}
       {result && (

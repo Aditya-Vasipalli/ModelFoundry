@@ -127,13 +127,23 @@ export default async function DashboardPage() {
 
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {job.status === 'ready' && (
-                    <Link
-                      href={`/dashboard/model/${job.id}`}
-                      className="btn-primary"
-                      style={{ padding: '8px 16px', fontSize: '13px' }}
-                    >
-                      Open Predictor →
-                    </Link>
+                    <>
+                      <Link
+                        href={`/dashboard/model/${job.id}`}
+                        className="btn-primary"
+                        style={{ padding: '8px 16px', fontSize: '13px' }}
+                      >
+                        Open Predictor →
+                      </Link>
+                      <Link
+                        href={`/share/model/${job.id}`}
+                        target="_blank"
+                        className="btn-ghost"
+                        style={{ padding: '8px 16px', fontSize: '13px', color: 'var(--accent-hover)' }}
+                      >
+                        🔗 Public Link
+                      </Link>
+                    </>
                   )}
                   <form action={deleteJob}>
                     <input type="hidden" name="id" value={job.id} />
