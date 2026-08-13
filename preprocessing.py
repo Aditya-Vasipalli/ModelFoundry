@@ -31,9 +31,15 @@ class TargetCorrelationSelector(BaseEstimator, TransformerMixin):
             # Drop NaNs just for correlation calculation
             valid_idx = ~df_X[col].isna() & ~pd.isna(y)
             if valid_idx.sum() > 1:
-                corr = np.abs(np.corrcoef(df_X[col][valid_idx], y[valid_idx])[0, 1])
-                # Handle NaNs in correlation (e.g., zero variance)
-                if np.isnan(corr):
+                try:
+                    y_clean = y[valid_idx]
+                    if not pd.api.types.is_numeric_dtype(y_clean):
+                        y_clean = pd.factorize(y_clean)[0]
+                        
+                    corr = np.abs(np.corrcoef(df_X[col][valid_idx], y_clean)[0, 1])
+                    if np.isnan(corr):
+                        corr = 0
+                except Exception:
                     corr = 0
             else:
                 corr = 0
