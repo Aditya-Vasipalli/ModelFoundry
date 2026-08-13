@@ -100,7 +100,7 @@ export default async function ModelPage({ params }: { params: Promise<{ id: stri
         </div>
 
         {/* Prediction Form */}
-        <PredictionForm modelId={id} isClassification={isClassification} />
+        <PredictionForm modelId={id} isClassification={isClassification} features={typedJob.features} />
       </div>
     </div>
   )
