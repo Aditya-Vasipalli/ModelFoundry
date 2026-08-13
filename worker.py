@@ -57,7 +57,11 @@ def process_job(job):
         remote_model_path = f"{job_id}.joblib"
         print(f"Uploading model to {remote_model_path}...")
         with open(local_model_path, "rb") as f:
-            supabase.storage.from_("models").upload(remote_model_path, f)
+            supabase.storage.from_("models").upload(
+                remote_model_path, 
+                f,
+                file_options={"content-type": "application/octet-stream"}
+            )
 
         # 6. Update Database
         print("Updating database with metrics...")

@@ -23,6 +23,15 @@ def get_model(model_type):
         
     return models[model_type]
 
+class ModelPipeline:
+    def __init__(self, preprocessor, model):
+        self.preprocessor = preprocessor
+        self.model = model
+        
+    def predict(self, X):
+        X_processed = self.preprocessor.transform(X)
+        return self.model.predict(X_processed)
+
 def train_and_evaluate(df_X, y, model_type, model_id, save_dir='./temp_models'):
     """
     Trains a model pipeline and evaluates it.
@@ -39,22 +48,19 @@ def train_and_evaluate(df_X, y, model_type, model_id, save_dir='./temp_models'):
     X_train, X_test, y_train, y_test = train_test_split(df_X, y, test_size=0.2, random_state=42)
 
     # 1. Get Preprocessor
-    preprocessor = build_preprocessor(X_train, y_train)
+    from preprocessing import DataPreprocessor
+    preprocessor = DataPreprocessor(is_regression=not is_classification)
 
-    # 2. Get Model
+    # 2. Preprocess Training Data (this handles outlier removal which modifies y)
+    X_train_processed, y_train_processed = preprocessor.fit_transform(X_train, y_train)
+
+    # 3. Get Model and Train
     model = get_model(model_type)
+    model.fit(X_train_processed, y_train_processed)
 
-    # 3. Create Pipeline
-    pipeline = Pipeline([
-        ('preprocessor', preprocessor),
-        ('model', model)
-    ])
-
-    # 4. Train
-    pipeline.fit(X_train, y_train)
-
-    # 5. Predict and Evaluate
-    y_pred = pipeline.predict(X_test)
+    # 4. Predict and Evaluate on Test Data
+    X_test_processed = preprocessor.transform(X_test)
+    y_pred = model.predict(X_test_processed)
     
     metrics = {}
     if is_classification:
@@ -68,7 +74,8 @@ def train_and_evaluate(df_X, y, model_type, model_id, save_dir='./temp_models'):
         metrics['rmse'] = float(mean_squared_error(y_test, y_pred, squared=False))
         metrics['r2_score'] = float(r2_score(y_test, y_pred))
 
-    # 6. Save Pipeline
+    # 5. Save Pipeline
+    pipeline = ModelPipeline(preprocessor, model)
     model_path = os.path.join(save_dir, f"{model_id}.joblib")
     joblib.dump(pipeline, model_path)
 

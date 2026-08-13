@@ -1,186 +1,233 @@
+"""
+preprocessing.py — Stateful data preprocessor.
+
+Order of operations (training):
+  1. Replace missing markers (?, NA, NaN, null, etc.) → np.nan
+  2. Encode all categoricals with LabelEncoder (fitted)
+  3. Impute remaining NaN → median per column (fitted)
+  4. Remove outlier ROWS using Z-score (training only)
+  5. Drop features with |corr(feature, y)| < corr_threshold
+  6. Drop collinear features (pairwise corr > collinearity_threshold)
+  7. MinMaxScaler (fitted)
+  8. For regression: Yeo-Johnson PowerTransform for normality / homoscedasticity
+
+At inference (transform only):
+  Steps 1-3, 7-8 applied identically using fitted parameters.
+  Row removal and feature selection use columns learned at fit time.
+"""
+
 import pandas as pd
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler, PowerTransformer, OneHotEncoder, OrdinalEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder, PowerTransformer
 import warnings
 
-# Suppress some common sklearn warnings during transformations
 warnings.filterwarnings('ignore')
 
+# All strings that should be treated as missing
+MISSING_MARKERS = ['?', 'NA', 'NaN', 'nan', 'null', 'NULL',
+                   'None', 'none', '', 'N/A', 'n/a', '#N/A', 'na']
 
-class TargetCorrelationSelector(BaseEstimator, TransformerMixin):
+
+class DataPreprocessor(BaseEstimator, TransformerMixin):
     """
-    Drops numerical features that have a very low correlation with the target variable.
+    A single stateful transformer implementing the full preprocessing pipeline.
+    Designed to be saved with joblib alongside the model.
     """
-    def __init__(self, threshold=0.01):
-        self.threshold = threshold
-        self.selected_features_ = None
 
-    def fit(self, X, y):
-        # We only apply this to numerical data. X is expected to be a numpy array or DataFrame.
-        if isinstance(X, pd.DataFrame):
-            df_X = X
-        else:
-            df_X = pd.DataFrame(X)
-            
-        correlations = []
-        for col in df_X.columns:
-            # Drop NaNs just for correlation calculation
-            valid_idx = ~df_X[col].isna() & ~pd.isna(y)
-            if valid_idx.sum() > 1:
-                try:
-                    y_clean = y[valid_idx]
-                    if not pd.api.types.is_numeric_dtype(y_clean):
-                        y_clean = pd.factorize(y_clean)[0]
-                        
-                    corr = np.abs(np.corrcoef(df_X[col][valid_idx], y_clean)[0, 1])
-                    if np.isnan(corr):
-                        corr = 0
-                except Exception:
-                    corr = 0
-            else:
-                corr = 0
-            correlations.append(corr)
-            
-        correlations = np.array(correlations)
-        self.selected_features_ = (correlations >= self.threshold)
-        
-        # If all features are dropped, keep at least one with max correlation to avoid empty array errors
-        if not np.any(self.selected_features_):
-            self.selected_features_[np.argmax(correlations)] = True
-            
-        return self
+    def __init__(
+        self,
+        corr_threshold: float = 0.01,
+        collinearity_threshold: float = 0.85,
+        outlier_z: float = 3.0,
+        is_regression: bool = False,
+    ):
+        self.corr_threshold = corr_threshold
+        self.collinearity_threshold = collinearity_threshold
+        self.outlier_z = outlier_z
+        self.is_regression = is_regression
 
-    def transform(self, X):
-        if isinstance(X, pd.DataFrame):
-            return X.loc[:, self.selected_features_]
-        return X[:, self.selected_features_]
+        # Learned state (populated by fit_transform)
+        self.label_encoders_: dict = {}
+        self.impute_values_: dict = {}
+        self.keep_columns_: list = []
+        self.scaler_ = MinMaxScaler()
+        self.power_transformer_ = PowerTransformer(method='yeo-johnson') if is_regression else None
 
+    # ------------------------------------------------------------------
+    # Step 1: Replace missing markers
+    # ------------------------------------------------------------------
+    def _replace_missing(self, df: pd.DataFrame) -> pd.DataFrame:
+        return df.replace(MISSING_MARKERS, np.nan)
 
-class CollinearityDropper(BaseEstimator, TransformerMixin):
-    """
-    Drops features that are highly correlated with each other (multicollinearity).
-    """
-    def __init__(self, threshold=0.85):
-        self.threshold = threshold
-        self.drop_indices_ = []
+    # ------------------------------------------------------------------
+    # Step 2: Encode all categorical columns
+    # ------------------------------------------------------------------
+    def _encode_categoricals(self, df: pd.DataFrame, fit: bool) -> pd.DataFrame:
+        df = df.copy()
+        cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
 
-    def fit(self, X, y=None):
-        if isinstance(X, pd.DataFrame):
-            df = X
-        else:
-            df = pd.DataFrame(X)
+        for col in cat_cols:
+            if fit:
+                le = LabelEncoder()
+                # Fit only on non-null values cast to str
+                non_null_vals = df[col].dropna().astype(str).unique()
+                le.fit(non_null_vals)
+                self.label_encoders_[col] = le
 
+            le = self.label_encoders_.get(col)
+            if le is None:
+                # Unknown column at inference — drop it silently
+                df[col] = 0
+                continue
+
+            def safe_encode(val, _le=le):
+                if pd.isna(val):
+                    return np.nan
+                s = str(val)
+                return int(_le.transform([s])[0]) if s in _le.classes_ else -1
+
+            df[col] = df[col].apply(safe_encode)
+
+        return df
+
+    # ------------------------------------------------------------------
+    # Step 3: Impute NaN with column medians (all cols numeric by now)
+    # ------------------------------------------------------------------
+    def _impute(self, df: pd.DataFrame, fit: bool) -> pd.DataFrame:
+        df = df.copy()
+        if fit:
+            self.impute_values_ = {}
+            for col in df.columns:
+                median_val = df[col].median()
+                # If column is entirely NaN, fallback to 0
+                self.impute_values_[col] = 0 if pd.isna(median_val) else median_val
+
+        for col, val in self.impute_values_.items():
+            if col in df.columns:
+                df[col] = df[col].fillna(val)
+
+        # Safety net: fill any remaining NaN with 0
+        df = df.fillna(0)
+        return df
+
+    # ------------------------------------------------------------------
+    # Step 4: Remove outlier ROWS (training only, not applied at inference)
+    # ------------------------------------------------------------------
+    def _remove_outlier_rows(self, df: pd.DataFrame, y: pd.Series):
+        std = df.std().replace(0, 1e-8)
+        z_scores = ((df - df.mean()) / std).abs()
+        mask = (z_scores < self.outlier_z).all(axis=1)
+        return df[mask].reset_index(drop=True), y[mask].reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Step 5: Drop low-correlation features
+    # ------------------------------------------------------------------
+    def _drop_low_correlation(self, df: pd.DataFrame, y: pd.Series):
+        y_num = y.copy().reset_index(drop=True)
+        if not pd.api.types.is_numeric_dtype(y_num):
+            y_num = pd.Series(pd.factorize(y_num)[0])
+
+        keep = []
+        for col in df.columns:
+            try:
+                corr = float(np.abs(np.corrcoef(df[col].reset_index(drop=True), y_num)[0, 1]))
+                if np.isnan(corr):
+                    corr = 0.0
+            except Exception:
+                corr = 0.0
+            if corr >= self.corr_threshold:
+                keep.append(col)
+
+        if not keep:
+            keep = [df.columns[0]]  # Always keep at least one feature
+
+        return df[keep], keep
+
+    # ------------------------------------------------------------------
+    # Step 6: Drop collinear features (upper triangle of corr matrix)
+    # ------------------------------------------------------------------
+    def _drop_collinear(self, df: pd.DataFrame):
         corr_matrix = df.corr().abs()
-        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-        
-        self.drop_indices_ = [i for i, column in enumerate(upper.columns) if any(upper[column] > self.threshold)]
-        return self
+        upper = corr_matrix.where(
+            np.triu(np.ones(corr_matrix.shape, dtype=bool), k=1)
+        )
+        drop = {col for col in upper.columns if any(upper[col] > self.collinearity_threshold)}
+        keep = [col for col in df.columns if col not in drop]
+
+        if not keep:
+            keep = [df.columns[0]]
+
+        return df[keep], keep
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def fit_transform(self, X, y):
+        """Full training pipeline including row removal. Returns (X_processed, y_processed)."""
+        df = pd.DataFrame(X).copy()
+        y = pd.Series(y).reset_index(drop=True)
+
+        # 1. Replace missing markers
+        df = self._replace_missing(df)
+
+        # 2. Encode categoricals (fit)
+        df = self._encode_categoricals(df, fit=True)
+
+        # 3. Impute NaN (fit)
+        df = self._impute(df, fit=True)
+
+        # 4. Remove outlier rows (only during training)
+        df, y = self._remove_outlier_rows(df, y)
+
+        # 5. Drop low-correlation features
+        df, keep = self._drop_low_correlation(df, y)
+
+        # 6. Drop collinear features
+        df, keep = self._drop_collinear(df)
+        self.keep_columns_ = keep
+
+        # 7. MinMax scale (fit)
+        X_scaled = self.scaler_.fit_transform(df)
+        df_scaled = pd.DataFrame(X_scaled, columns=self.keep_columns_)
+
+        # 8. For regression: Yeo-Johnson to stabilise variance (homoscedasticity)
+        if self.is_regression and self.power_transformer_ is not None:
+            X_final = self.power_transformer_.fit_transform(df_scaled)
+            df_scaled = pd.DataFrame(X_final, columns=self.keep_columns_)
+
+        return df_scaled, y
 
     def transform(self, X):
-        if isinstance(X, pd.DataFrame):
-            return X.drop(X.columns[self.drop_indices_], axis=1)
-        return np.delete(X, self.drop_indices_, axis=1)
+        """Inference pipeline — no row removal."""
+        df = pd.DataFrame(X).copy()
 
+        # 1. Replace missing markers
+        df = self._replace_missing(df)
 
-class OutlierClipper(BaseEstimator, TransformerMixin):
-    """
-    Clips extreme outliers based on IQR. This is more robust than deleting rows 
-    in a pipeline (as transformers shouldn't drop rows in sklearn).
-    """
-    def __init__(self, factor=3.0):
-        self.factor = factor
-        self.lower_bounds_ = None
-        self.upper_bounds_ = None
+        # 2. Encode categoricals (use fitted encoders)
+        df = self._encode_categoricals(df, fit=False)
+
+        # 3. Impute NaN (use fitted medians)
+        df = self._impute(df, fit=False)
+
+        # Keep only columns selected during training
+        for col in self.keep_columns_:
+            if col not in df.columns:
+                df[col] = self.impute_values_.get(col, 0)
+        df = df[self.keep_columns_]
+
+        # 7. MinMax scale
+        X_scaled = self.scaler_.transform(df)
+        df_scaled = pd.DataFrame(X_scaled, columns=self.keep_columns_)
+
+        # 8. Regression: Yeo-Johnson
+        if self.is_regression and self.power_transformer_ is not None:
+            X_final = self.power_transformer_.transform(df_scaled)
+            df_scaled = pd.DataFrame(X_final, columns=self.keep_columns_)
+
+        return df_scaled
 
     def fit(self, X, y=None):
-        if isinstance(X, pd.DataFrame):
-            df = X
-        else:
-            df = pd.DataFrame(X)
-            
-        Q1 = df.quantile(0.25)
-        Q3 = df.quantile(0.75)
-        IQR = Q3 - Q1
-        
-        self.lower_bounds_ = (Q1 - self.factor * IQR).values
-        self.upper_bounds_ = (Q3 + self.factor * IQR).values
+        """Sklearn compatibility. Use fit_transform for actual fitting."""
         return self
-
-    def transform(self, X):
-        X_copy = X.copy()
-        if isinstance(X_copy, pd.DataFrame):
-            X_copy = X_copy.values
-            
-        # Clip values
-        for i in range(X_copy.shape[1]):
-            X_copy[:, i] = np.clip(X_copy[:, i], self.lower_bounds_[i], self.upper_bounds_[i])
-            
-        if isinstance(X, pd.DataFrame):
-            return pd.DataFrame(X_copy, columns=X.columns, index=X.index)
-        return X_copy
-
-
-def build_preprocessor(df_X, y=None):
-    """
-    Builds an automated sklearn pipeline based on the dataframe characteristics.
-    """
-    # Replace common missing value indicators with np.nan
-    df_X = df_X.replace(['?', 'NA', 'NaN', 'null', ''], np.nan)
-    
-    # Identify column types
-    numeric_cols = df_X.select_dtypes(include=['int64', 'float64']).columns.tolist()
-    categorical_cols = df_X.select_dtypes(exclude=['int64', 'float64']).columns.tolist()
-
-    # Separate categorical into low and high cardinality
-    low_cardinality_cols = [col for col in categorical_cols if df_X[col].nunique() < 10]
-    high_cardinality_cols = [col for col in categorical_cols if df_X[col].nunique() >= 10]
-
-    # Numeric Pipeline
-    numeric_pipeline_steps = [
-        ('imputer', SimpleImputer(strategy='median')),
-        ('outlier_clipper', OutlierClipper(factor=3.0)), # Clip extreme outliers
-        ('collinearity', CollinearityDropper(threshold=0.85)) # Drop highly correlated features
-    ]
-    
-    # If y is provided during build, we can add Target Correlation selection
-    if y is not None:
-        numeric_pipeline_steps.insert(2, ('target_corr', TargetCorrelationSelector(threshold=0.01)))
-        
-    numeric_pipeline_steps.extend([
-        ('normality', PowerTransformer(method='yeo-johnson')), # Make data Gaussian
-        ('scaler', StandardScaler())
-    ])
-    
-    numeric_transformer = Pipeline(numeric_pipeline_steps)
-
-    # Categorical Pipelines
-    low_cardinality_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='most_frequent')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-    ])
-    
-    high_cardinality_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='most_frequent')),
-        ('ordinal', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1))
-    ])
-
-    # Combine using ColumnTransformer
-    transformers = []
-    if numeric_cols:
-        transformers.append(('num', numeric_transformer, numeric_cols))
-    if low_cardinality_cols:
-        transformers.append(('cat_low', low_cardinality_transformer, low_cardinality_cols))
-    if high_cardinality_cols:
-        transformers.append(('cat_high', high_cardinality_transformer, high_cardinality_cols))
-
-    preprocessor = ColumnTransformer(transformers=transformers, remainder='drop')
-    
-    return preprocessor
-
-def get_preprocessed_pipeline():
-    # Helper to just get a generic pipeline skeleton if needed
-    pass
