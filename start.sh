@@ -1,9 +1,8 @@
 #!/bin/bash
+# Runs the API and the training worker in one container.
+# (docker compose runs them as separate services and doesn't use this script.)
 
-# Start the ML Worker in the background, output to stdout/stderr
-python -u worker.py 2>&1 &
-WORKER_PID=$!
-echo "Worker started with PID $WORKER_PID"
+python -u worker.py &
+echo "Worker started with PID $!"
 
-# Start the FastAPI application in the foreground
-uvicorn main:app --host 0.0.0.0 --port 8000
+exec uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}"

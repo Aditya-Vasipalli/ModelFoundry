@@ -1,110 +1,202 @@
 import Link from 'next/link'
+import { getUser } from '@/utils/supabase/server'
+import { Logo } from '@/components/ui'
+import {
+  ArrowRightIcon, ChartIcon, CodeIcon, GithubIcon, LinkIcon, ServerIcon, ShieldIcon, TargetIcon, UploadIcon, WandIcon, ZapIcon,
+} from '@/components/icons'
 
-export default function LandingPage() {
+const GITHUB_URL = 'https://github.com/Aditya-Vasipalli/ModelFoundry'
+
+const STEPS = [
+  { icon: UploadIcon, title: 'Upload a CSV', desc: 'Drop in any table with a header row — comma, semicolon or tab separated.' },
+  { icon: TargetIcon, title: 'Pick what to predict', desc: 'Choose the target column. We suggest the right kind of model for it.' },
+  { icon: ZapIcon, title: 'Predict anywhere', desc: 'Use the generated form, share a public link, or call the REST endpoint.' },
+]
+
+const FEATURES = [
+  { icon: WandIcon, title: 'Automatic preprocessing', desc: 'Missing values, categorical encoding, outliers, scaling and feature selection — handled for you.' },
+  { icon: ChartIcon, title: 'Classification & regression', desc: 'Random forests, logistic and linear regression, evaluated on a held-out test split.' },
+  { icon: CodeIcon, title: 'Instant REST endpoint', desc: 'Every trained model gets a stable URL that accepts JSON and returns predictions.' },
+  { icon: LinkIcon, title: 'Shareable predictor', desc: 'A public page with a form generated from your columns — send it to anyone.' },
+  { icon: ShieldIcon, title: 'Private by default', desc: 'Datasets are deleted right after training. Models stay private until you share them.' },
+  { icon: ServerIcon, title: 'Runs on your hardware', desc: 'One docker compose command runs the trainer and API, exposed through a secure tunnel.' },
+]
+
+function HeroVisual() {
   return (
-    <div className="min-h-screen bg-black relative selection:bg-zinc-800 selection:text-white">
-      {/* Subtle top spotlight */}
-      <div 
-        className="absolute top-[-20%] left-1/2 -translate-x-1/2 w-[800px] h-[600px] rounded-full pointer-events-none opacity-20"
-        style={{ background: 'radial-gradient(circle, rgba(255,255,255,0.4) 0%, transparent 70%)' }} 
-      />
+    <div className="relative mx-auto mt-16 w-full max-w-4xl sm:mt-20">
+      <div className="absolute -inset-x-8 -top-8 -bottom-8 rounded-[2rem] bg-gradient-to-b from-white/[0.07] to-transparent blur-2xl" />
+      <div className="relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/90 text-left shadow-2xl shadow-black">
+        <div className="flex items-center gap-1.5 border-b border-zinc-800 px-4 py-3">
+          <span className="size-2.5 rounded-full bg-zinc-700" />
+          <span className="size-2.5 rounded-full bg-zinc-700" />
+          <span className="size-2.5 rounded-full bg-zinc-700" />
+          <span className="ml-3 truncate font-mono text-[11px] text-zinc-500">POST /api/v1/models/677a…/predict</span>
+        </div>
+        <div className="grid md:grid-cols-[1fr_1.1fr]">
+          <div className="space-y-4 border-b border-zinc-800 p-5 md:border-r md:border-b-0 sm:p-6">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-medium text-zinc-100">titanic</p>
+              <span className="inline-flex h-5 items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 text-[11px] text-emerald-300">
+                <span className="size-1.5 rounded-full bg-emerald-400" /> Ready
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {[['Accuracy', '81.0%'], ['F1 score', '81.0%']].map(([k, v]) => (
+                <div key={k} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+                  <p className="text-[11px] text-zinc-500">{k}</p>
+                  <p className="mt-1 font-mono text-lg font-semibold text-emerald-300">{v}</p>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2">
+              {[['Sex', 'female'], ['Pclass', '1'], ['Age', '29']].map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/30 px-3 py-2 text-xs">
+                  <span className="text-zinc-500">{k}</span>
+                  <span className="font-mono text-zinc-200">{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <pre className="overflow-x-auto p-5 font-mono text-[12px] leading-relaxed sm:p-6 sm:text-[13px]">
+            <span className="text-zinc-500">{'// response'}</span>{'\n'}
+            <span className="text-zinc-400">{'{'}</span>{'\n'}
+            {'  '}<span className="text-sky-300">&quot;prediction&quot;</span><span className="text-zinc-500">: </span><span className="text-amber-200">1</span><span className="text-zinc-500">,</span>{'\n'}
+            {'  '}<span className="text-sky-300">&quot;probability&quot;</span><span className="text-zinc-500">: </span><span className="text-amber-200">0.99</span><span className="text-zinc-500">,</span>{'\n'}
+            {'  '}<span className="text-sky-300">&quot;probabilities&quot;</span><span className="text-zinc-500">: [</span>{'\n'}
+            {'    '}<span className="text-zinc-500">{'{ '}</span><span className="text-sky-300">&quot;label&quot;</span><span className="text-zinc-500">: </span><span className="text-amber-200">1</span><span className="text-zinc-500">, </span><span className="text-sky-300">&quot;probability&quot;</span><span className="text-zinc-500">: </span><span className="text-amber-200">0.99</span><span className="text-zinc-500">{' },'}</span>{'\n'}
+            {'    '}<span className="text-zinc-500">{'{ '}</span><span className="text-sky-300">&quot;label&quot;</span><span className="text-zinc-500">: </span><span className="text-amber-200">0</span><span className="text-zinc-500">, </span><span className="text-sky-300">&quot;probability&quot;</span><span className="text-zinc-500">: </span><span className="text-amber-200">0.01</span><span className="text-zinc-500">{' }'}</span>{'\n'}
+            {'  '}<span className="text-zinc-500">]</span>{'\n'}
+            <span className="text-zinc-400">{'}'}</span>
+          </pre>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default async function LandingPage() {
+  const user = await getUser()
+  const primaryHref = user ? '/dashboard' : '/login'
+
+  return (
+    <div className="relative min-h-dvh overflow-x-clip">
+      <div className="bg-grid pointer-events-none absolute inset-x-0 top-0 h-[900px]" />
+      <div className="bg-spotlight pointer-events-none absolute inset-x-0 top-0 h-[700px]" />
 
       {/* Navbar */}
-      <nav className="relative z-10 flex items-center justify-between px-8 py-5 border-b border-zinc-900 bg-black/50 backdrop-blur-md">
-        <div className="flex items-center gap-2">
-          <svg className="w-5 h-5 text-zinc-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-            <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-            <line x1="12" y1="22.08" x2="12" y2="12" />
-          </svg>
-          <span className="text-sm font-semibold tracking-tight text-zinc-100">ModelFoundry</span>
+      <header className="sticky top-0 z-40 border-b border-zinc-900/80 bg-[#050506]/70 backdrop-blur-xl">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
+          <Logo />
+          <nav className="flex items-center gap-1 sm:gap-2">
+            <a href="#how" className="btn btn-ghost btn-sm hidden sm:inline-flex">How it works</a>
+            <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm btn-icon w-8 sm:w-auto sm:px-3" aria-label="GitHub">
+              <GithubIcon /> <span className="hidden sm:inline">GitHub</span>
+            </a>
+            <Link href={primaryHref} className="btn btn-primary btn-sm ml-1">
+              {user ? 'Dashboard' : 'Get started'}
+            </Link>
+          </nav>
         </div>
-        <div className="flex items-center gap-4">
-          <Link href="/login" className="text-sm font-medium text-zinc-400 hover:text-zinc-100 transition-colors">
-            Log in
-          </Link>
-          <Link href="/login" className="btn-primary" style={{ padding: '6px 14px', fontSize: '13px' }}>
-            Get Started
-          </Link>
-        </div>
-      </nav>
+      </header>
 
-      {/* Hero */}
-      <main className="relative z-10 flex flex-col items-center justify-center text-center px-4 pt-40 pb-24">
-        {/* Pill Badge */}
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-10 text-xs font-medium border border-zinc-800 bg-zinc-900/50 text-zinc-300">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-          </span>
-          Free • No credit card required
-        </div>
+      <main className="relative">
+        {/* Hero */}
+        <section className="px-4 pt-16 pb-20 text-center sm:px-6 sm:pt-24 sm:pb-28">
+          <div className="animate-fade-up mx-auto inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs font-medium text-zinc-300">
+            <span className="relative flex size-2">
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+            </span>
+            Free &amp; open source
+          </div>
 
-        <h1 className="text-5xl md:text-7xl font-bold mb-6 tracking-tight max-w-4xl text-zinc-100 leading-[1.1]">
-          Deploy your ML models as <br className="hidden md:block" />
-          <span className="text-transparent bg-clip-text bg-gradient-to-b from-white to-zinc-500">
-            production ready APIs.
-          </span>
-        </h1>
+          <h1 className="animate-fade-up mx-auto mt-8 max-w-4xl text-4xl leading-[1.05] font-semibold tracking-tight text-balance text-zinc-50 sm:text-6xl md:text-7xl">
+            Turn any CSV into a{' '}
+            <span className="bg-gradient-to-b from-zinc-100 to-zinc-500 bg-clip-text text-transparent">live prediction API</span>
+          </h1>
 
-        <p className="text-lg md:text-xl mb-10 max-w-2xl text-zinc-400 leading-relaxed font-light">
-          Upload a CSV, select a model architecture, and instantly receive a live prediction endpoint. Zero configuration, auto-preprocessing, and instant scaling.
-        </p>
+          <p className="animate-fade-up mx-auto mt-6 max-w-2xl text-base leading-relaxed text-pretty text-zinc-400 sm:text-lg">
+            Upload a dataset, choose what to predict, and get a trained model with a shareable
+            predictor page and a REST endpoint. No notebooks, no infrastructure.
+          </p>
 
-        <div className="flex flex-col sm:flex-row items-center gap-4">
-          <Link href="/login" className="btn-primary" style={{ padding: '12px 28px', fontSize: '15px' }}>
-            Start Deploying
-          </Link>
-          <a href="https://github.com/Aditya-Vasipalli/ModelFoundry" target="_blank" rel="noreferrer"
-            className="btn-ghost" style={{ padding: '12px 28px', fontSize: '15px' }}>
-            <svg className="w-5 h-5 mr-1" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z" />
-            </svg>
-            View Documentation
-          </a>
-        </div>
+          <div className="animate-fade-up mt-10 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
+            <Link href={primaryHref} className="btn btn-primary btn-lg">
+              {user ? 'Open dashboard' : 'Start for free'} <ArrowRightIcon />
+            </Link>
+            <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="btn btn-secondary btn-lg">
+              <GithubIcon /> View on GitHub
+            </a>
+          </div>
 
-        {/* Feature Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mt-32 max-w-5xl w-full text-left px-4">
-          {[
-            { 
-              icon: (
-                <svg className="w-5 h-5 text-zinc-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
-                </svg>
-              ),
-              title: 'Automated Pipeline', 
-              desc: 'Missing values imputation, categorical encoding, scaling, and collinearity checks handled entirely via Pandas & Scikit-Learn.' 
-            },
-            { 
-              icon: (
-                <svg className="w-5 h-5 text-zinc-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.433 4.433 0 002.906 2.907 4.494 4.494 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
-                </svg>
-              ),
-              title: 'Multiple Architectures', 
-              desc: 'Train Logistic Regression, Random Forest, or Linear Regression models. Models are automatically evaluated and metrics logged.' 
-            },
-            { 
-              icon: (
-                <svg className="w-5 h-5 text-zinc-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
-                </svg>
-              ),
-              title: 'Instant Endpoints', 
-              desc: 'Every successful training job yields a live, public-facing inference endpoint and a dynamically generated UI for predictions.' 
-            },
-          ].map((f) => (
-            <div key={f.title} className="glass card-hover flex flex-col p-6 group">
-              <div className="w-10 h-10 rounded-lg border border-zinc-800 bg-zinc-900/50 flex items-center justify-center mb-5 group-hover:border-zinc-700 transition-colors">
-                {f.icon}
-              </div>
-              <h3 className="text-base font-semibold mb-2 text-zinc-100 tracking-tight">{f.title}</h3>
-              <p className="text-sm text-zinc-400 leading-relaxed">{f.desc}</p>
+          <HeroVisual />
+        </section>
+
+        {/* How it works */}
+        <section id="how" className="scroll-mt-20 border-t border-zinc-900 px-4 py-20 sm:px-6 sm:py-28">
+          <div className="mx-auto max-w-6xl">
+            <p className="text-sm font-medium text-zinc-500">How it works</p>
+            <h2 className="mt-2 max-w-xl text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">
+              From spreadsheet to endpoint in three steps
+            </h2>
+            <ol className="mt-12 grid gap-4 md:grid-cols-3">
+              {STEPS.map((step, i) => (
+                <li key={step.title} className="card relative p-6">
+                  <span className="absolute top-6 right-6 font-mono text-xs text-zinc-700">0{i + 1}</span>
+                  <span className="flex size-10 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-200">
+                    <step.icon size={18} />
+                  </span>
+                  <h3 className="mt-5 font-medium text-zinc-100">{step.title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-zinc-400">{step.desc}</p>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </section>
+
+        {/* Features */}
+        <section className="border-t border-zinc-900 px-4 py-20 sm:px-6 sm:py-28">
+          <div className="mx-auto max-w-6xl">
+            <p className="text-sm font-medium text-zinc-500">Features</p>
+            <h2 className="mt-2 max-w-xl text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">
+              The boring parts of ML, done for you
+            </h2>
+            <div className="mt-12 grid gap-px overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-800 sm:grid-cols-2 lg:grid-cols-3">
+              {FEATURES.map((f) => (
+                <div key={f.title} className="bg-[#08080a] p-6 sm:p-8">
+                  <f.icon size={20} className="text-zinc-300" />
+                  <h3 className="mt-4 font-medium text-zinc-100">{f.title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-zinc-400">{f.desc}</p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        </section>
+
+        {/* CTA */}
+        <section className="border-t border-zinc-900 px-4 py-20 sm:px-6 sm:py-28">
+          <div className="relative mx-auto max-w-4xl overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950 px-6 py-14 text-center sm:px-12 sm:py-20">
+            <div className="bg-spotlight pointer-events-none absolute inset-0" />
+            <h2 className="relative text-3xl font-semibold tracking-tight text-balance text-zinc-50 sm:text-4xl">
+              Your next model is one upload away
+            </h2>
+            <p className="relative mx-auto mt-4 max-w-md text-zinc-400">
+              Sign in with Google and train your first model in under a minute.
+            </p>
+            <Link href={primaryHref} className="btn btn-primary btn-lg relative mt-8">
+              {user ? 'Open dashboard' : 'Get started'} <ArrowRightIcon />
+            </Link>
+          </div>
+        </section>
       </main>
+
+      <footer className="border-t border-zinc-900 px-4 py-8 sm:px-6">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-sm text-zinc-500 sm:flex-row">
+          <Logo />
+          <p>Built with Next.js, Supabase and scikit-learn.</p>
+        </div>
+      </footer>
     </div>
   )
 }

@@ -1,9 +1,22 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+
 export const metadata: Metadata = {
-  title: "ModelFoundry — Turn your data into a prediction API",
-  description: "Upload a dataset, train a model, and get a shareable prediction API in minutes. Supports classification and regression.",
+  title: {
+    default: "ModelFoundry — Turn a CSV into a prediction API",
+    template: "%s · ModelFoundry",
+  },
+  description:
+    "Upload a dataset, train a model, and get a shareable prediction page and REST API in minutes. Supports classification and regression.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#050506",
+  colorScheme: "dark",
 };
 
 export default function RootLayout({
@@ -12,13 +25,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-      </head>
-      <body suppressHydrationWarning>{children}</body>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className="min-h-dvh font-sans" suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }

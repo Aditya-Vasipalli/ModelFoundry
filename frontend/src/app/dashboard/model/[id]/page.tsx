@@ -1,107 +1,116 @@
-import { createClient } from '@/utils/supabase/server'
-import { redirect, notFound } from 'next/navigation'
+import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
+import { createClient, getUser } from '@/utils/supabase/server'
+import { getBackendStatus } from '@/lib/backend'
+import { siteOrigin } from '@/lib/site'
+import { displayName, formatRelative, isClassification, modelLabel } from '@/lib/models'
+import type { TrainingJob } from '@/types'
+import { MetricGrid, Notice, StatusBadge } from '@/components/ui'
+import { AlertIcon, ArrowLeftIcon, ExternalIcon, PlusIcon, Spinner } from '@/components/icons'
 import PredictionForm from '@/components/PredictionForm'
-import { TrainingJob, ClassificationMetrics, RegressionMetrics } from '@/types'
+import ApiPanel from '@/components/ApiPanel'
+import AutoRefresh from '@/components/AutoRefresh'
+import CopyButton from '@/components/CopyButton'
+import DeleteModelButton from '@/components/DeleteModelButton'
 
-export default async function ModelPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
+type Props = { params: Promise<{ id: string }> }
+
+async function getJob(id: string) {
+  const user = await getUser()
+  if (!user) return null
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const { data: job } = await supabase
+  const { data } = await supabase
     .from('training_jobs')
     .select('*')
     .eq('id', id)
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
+  return data as TrainingJob | null
+}
 
-  if (!job || job.status !== 'ready') notFound()
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const job = await getJob((await params).id)
+  return { title: job ? displayName(job.dataset_name) : 'Model' }
+}
 
-  const typedJob = job as TrainingJob
-  const isClassification = typedJob.model_type.includes('classifier') || typedJob.model_type.includes('logistic')
-  const m = typedJob.metrics
+export default async function ModelPage({ params }: Props) {
+  const { id } = await params
+  const [job, backend, origin] = await Promise.all([getJob(id), getBackendStatus(), siteOrigin()])
+  if (!job) notFound()
+
+  const classification = isClassification(job.model_type)
+  const sharePath = `/share/model/${job.id}`
+  const ready = job.status === 'ready'
 
   return (
-    <div className="min-h-screen grid-bg">
-      <nav className="flex items-center justify-between px-8 py-4 border-b sticky top-0 z-50"
-        style={{ borderColor: 'var(--border)', background: 'rgba(8,11,20,0.85)', backdropFilter: 'blur(20px)' }}>
-        <Link href="/" className="text-lg font-bold gradient-text">⚗️ ModelFoundry</Link>
-        <Link href="/dashboard" className="btn-ghost" style={{ padding: '8px 16px', fontSize: '13px' }}>
-          ← My Models
-        </Link>
-      </nav>
+    <div className="space-y-6">
+      <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-sm text-zinc-500 transition-colors hover:text-zinc-200">
+        <ArrowLeftIcon size={14} /> All models
+      </Link>
 
-      <div className="max-w-4xl mx-auto px-6 py-10">
-        {/* Model Header */}
-        <div className="glass p-6 mb-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <h1 className="text-2xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>
-                {typedJob.dataset_name}
-              </h1>
-              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                {typedJob.model_type.replace(/_/g, ' ')} • Target: <strong>{typedJob.target_column}</strong>
-              </p>
-            </div>
-            <span className="status-badge status-ready">
-              <span className="pulse-dot" />Ready
-            </span>
+      {/* Header */}
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="truncate text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">
+              {displayName(job.dataset_name)}
+            </h1>
+            <StatusBadge status={job.status} />
           </div>
-
-          {/* Metrics */}
-          {m && (
-            <div className="flex gap-6 mt-4 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
-              {isClassification ? (
-                <>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Accuracy</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--success)' }}>
-                      {((m as ClassificationMetrics).accuracy * 100).toFixed(1)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>F1 Score</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--success)' }}>
-                      {((m as ClassificationMetrics).f1_score * 100).toFixed(1)}%
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>R² Score</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--success)' }}>
-                      {(m as RegressionMetrics).r2_score.toFixed(3)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>RMSE</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                      {(m as RegressionMetrics).rmse.toFixed(3)}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+          <p className="mt-2 text-sm text-zinc-500">
+            {modelLabel(job.model_type)} · predicts <span className="text-zinc-200">{job.target_column}</span> · trained {formatRelative(job.created_at)}
+            {job.metrics?.train_rows ? ` on ${job.metrics.train_rows.toLocaleString('en-US')} rows` : ''}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          {ready && (
+            <>
+              <CopyButton value={sharePath} absolute label="Copy share link" copiedLabel="Link copied" className="btn btn-secondary btn-sm" />
+              <Link href={sharePath} target="_blank" className="btn btn-secondary btn-sm">
+                <ExternalIcon size={14} /> Public page
+              </Link>
+            </>
           )}
+          <DeleteModelButton id={job.id} redirectTo="/dashboard" className={ready ? 'col-span-2 sm:col-span-1' : ''} />
         </div>
-
-        {/* API Hint */}
-        <div className="glass p-4 mb-6 flex items-center gap-3">
-          <span className="text-xl">🔗</span>
-          <div>
-            <div className="text-sm font-medium mb-0.5" style={{ color: 'var(--text-primary)' }}>REST API Endpoint</div>
-            <code className="text-xs" style={{ color: 'var(--accent-hover)' }}>
-              POST {process.env.NEXT_PUBLIC_ML_API_URL}/api/v1/models/{id}/predict
-            </code>
-          </div>
-        </div>
-
-        {/* Prediction Form */}
-        <PredictionForm modelId={id} isClassification={isClassification} features={typedJob.features} />
       </div>
+
+      {ready ? (
+        <>
+          <MetricGrid type={job.model_type} metrics={job.metrics} />
+          <PredictionForm
+            modelId={job.id}
+            isClassification={classification}
+            features={job.features}
+            targetColumn={job.target_column}
+            backendOnline={backend.apiOnline}
+          />
+          {job.features && job.features.length > 0 && (
+            <ApiPanel endpoint={`${origin}/api/v1/models/${job.id}/predict`} features={job.features} isClassification={classification} />
+          )}
+        </>
+      ) : job.status === 'failed' ? (
+        <Notice tone="error" icon={<AlertIcon />} title="Training failed">
+          <p className="break-words">{job.error_message ?? 'Unknown error'}</p>
+          <Link href="/dashboard/upload" className="btn btn-secondary btn-sm mt-4">
+            <PlusIcon size={14} /> Train a new model
+          </Link>
+        </Notice>
+      ) : (
+        <div className="card flex flex-col items-center px-6 py-16 text-center">
+          <AutoRefresh intervalMs={3000} />
+          <Spinner size={22} className="text-zinc-400" />
+          <h2 className="mt-5 text-lg font-semibold text-zinc-100">
+            {job.status === 'processing' ? 'Training in progress' : 'Queued for training'}
+          </h2>
+          <p className="mt-2 max-w-sm text-sm text-zinc-400">
+            {backend.workerOnline || job.status === 'processing'
+              ? 'This usually takes a few seconds. The page updates by itself.'
+              : 'The backend is offline. Training starts as soon as you run docker compose up -d.'}
+          </p>
+        </div>
+      )}
     </div>
   )
 }

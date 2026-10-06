@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+frontend
+supabase
+cached_models
+temp_models
+temp_*.csv
+__pycache__
+*.pyc
+.venv
+venv
+*.md
+docker-compose.yml

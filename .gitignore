@@ -1,1 +1,8 @@
 .env
+__pycache__/
+*.pyc
+.venv/
+venv/
+cached_models/
+temp_models/
+temp_*.csv

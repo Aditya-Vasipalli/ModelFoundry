@@ -31,3 +31,8 @@ allowed_mime_types = ["text/csv", "application/octet-stream"]
 [storage.buckets.models]
 public = false
 file_size_limit = "200MiB"
+
+# Backend status (tunnel URL + heartbeats) — public, written only by the service role
+[storage.buckets.runtime]
+public = true
+file_size_limit = "1MiB"

@@ -1,25 +1,21 @@
-import { createClient } from '@/utils/supabase/server'
-import { redirect } from 'next/navigation'
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import UploadForm from '@/components/UploadForm'
+import { ArrowLeftIcon } from '@/components/icons'
 
-export default async function UploadPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+export const metadata: Metadata = { title: 'New model' }
 
+export default function UploadPage() {
   return (
-    <div className="min-h-screen grid-bg">
-      <nav className="flex items-center justify-between px-8 py-4 border-b sticky top-0 z-50"
-        style={{ borderColor: 'var(--border)', background: 'rgba(8,11,20,0.85)', backdropFilter: 'blur(20px)' }}>
-        <Link href="/" className="text-lg font-bold gradient-text">⚗️ ModelFoundry</Link>
-        <Link href="/dashboard" className="btn-ghost" style={{ padding: '8px 16px', fontSize: '13px' }}>
-          ← Back to Dashboard
-        </Link>
-      </nav>
-      <div className="flex items-center justify-center min-h-[calc(100vh-64px)] px-6 py-10">
-        <UploadForm />
-      </div>
+    <div className="mx-auto max-w-3xl">
+      <Link href="/dashboard" className="mb-6 inline-flex items-center gap-1.5 text-sm text-zinc-500 transition-colors hover:text-zinc-200">
+        <ArrowLeftIcon size={14} /> All models
+      </Link>
+      <h1 className="text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">Train a new model</h1>
+      <p className="mt-2 mb-8 text-sm text-zinc-400">
+        Cleaning, encoding, scaling and feature selection happen automatically — you just pick what to predict.
+      </p>
+      <UploadForm />
     </div>
   )
 }

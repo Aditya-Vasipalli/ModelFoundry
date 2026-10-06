@@ -1,9 +1,12 @@
-fastapi
-uvicorn
-scikit-learn
-pandas
-numpy
-joblib
-scipy
-supabase
-python-dotenv
+# Pinned to the major/minor versions the existing models were trained with:
+# a pickled model only loads reliably with the same scikit-learn release line.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1
+scikit-learn>=1.9,<1.10
+pandas>=3.0,<4
+numpy>=2.0,<3
+joblib>=1.4,<2
+scipy>=1.14,<2
+supabase>=2.20,<3
+python-dotenv>=1.0,<2

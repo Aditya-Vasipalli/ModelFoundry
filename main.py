@@ -1,65 +1,192 @@
+import logging
 import os
+import re
+import threading
+import time
+from collections import OrderedDict
+from contextlib import asynccontextmanager
+from typing import Any, Dict
+
+import httpx
 import joblib
-import pandas as pd
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, Any
-from dotenv import load_dotenv
-from supabase import create_client, Client
-import uvicorn
 
-load_dotenv()
+from supabase_utils import create_supabase, ensure_runtime_bucket, publish_status
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("modelfoundry.api")
 
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-else:
-    supabase = None
+supabase = create_supabase()
 
-app = FastAPI(title="ML Prediction API")
-
-# Allow Vercel frontend to talk to this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # In production, replace with Vercel URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Set by docker-compose: where the cloudflared sidecar exposes its metrics server
+TUNNEL_METRICS_URL = os.getenv("TUNNEL_METRICS_URL")
+# Optional: a fixed public URL (named tunnel, hosted deployment) instead of the quick tunnel
+PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "").rstrip("/") or None
+HEARTBEAT_SECONDS = 60
 
 MODEL_CACHE_DIR = "./cached_models"
-if not os.path.exists(MODEL_CACHE_DIR):
-    os.makedirs(MODEL_CACHE_DIR)
+MAX_MODELS_IN_MEMORY = 20
+JOB_CACHE_SECONDS = 60
+PUBLIC_JOB_FIELDS = "id,dataset_name,target_column,model_type,status,metrics,features,created_at"
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+
+
+# ----------------------------------------------------------------------
+# Tunnel discovery: publish the public API URL to Supabase automatically
+# ----------------------------------------------------------------------
+def discover_public_url() -> str | None:
+    if PUBLIC_API_URL:
+        return PUBLIC_API_URL
+    if not TUNNEL_METRICS_URL:
+        return None
+    hostname = httpx.get(f"{TUNNEL_METRICS_URL}/quicktunnel", timeout=5).json().get("hostname")
+    return f"https://{hostname}" if hostname else None
+
+
+def is_reachable(url: str) -> bool:
+    try:
+        return httpx.get(f"{url}/health", timeout=10).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def announce_public_url(stop: threading.Event) -> None:
+    ensure_runtime_bucket(supabase)
+    published, last_publish, failed_checks = None, 0.0, 0
+    while not stop.is_set():
+        try:
+            url = discover_public_url()
+            if url and url != published:
+                # A fresh quick tunnel can take a few seconds to route traffic.
+                # Publish once it answers (or after ~1 min, in case this
+                # container can't reach the public internet itself).
+                if is_reachable(url) or failed_checks >= 12:
+                    publish_status(supabase, "api", {"url": url, "online": True})
+                    published, last_publish, failed_checks = url, time.time(), 0
+                    log.info("Prediction API is live at %s", url)
+                else:
+                    failed_checks += 1
+            elif url and time.time() - last_publish >= HEARTBEAT_SECONDS:
+                publish_status(supabase, "api", {"url": url, "online": True})
+                last_publish = time.time()
+        except Exception as e:
+            log.warning("Could not publish API URL yet: %s", e)
+        stop.wait(5 if published is None else 15)
+
+    try:
+        publish_status(supabase, "api", {"url": published, "online": False})
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    stop = threading.Event()
+    announcer = None
+    if supabase and (TUNNEL_METRICS_URL or PUBLIC_API_URL):
+        announcer = threading.Thread(target=announce_public_url, args=(stop,), daemon=True)
+        announcer.start()
+    else:
+        log.info("No tunnel configured — API is only reachable locally.")
+    yield
+    stop.set()
+    if announcer:
+        announcer.join(timeout=10)
+
+
+app = FastAPI(title="ModelFoundry Prediction API", lifespan=lifespan)
+
+# Public prediction API: callable from any origin (no cookies involved)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 
 class PredictionRequest(BaseModel):
     features: Dict[str, Any]
 
-def get_model(model_id: str):
-    """
-    Retrieves the model from local cache, or downloads it from Supabase Storage.
-    """
-    local_model_path = os.path.join(MODEL_CACHE_DIR, f"{model_id}.joblib")
-    
-    if os.path.exists(local_model_path):
-        return joblib.load(local_model_path)
-        
+
+# ----------------------------------------------------------------------
+# Model + job lookups (cached)
+# ----------------------------------------------------------------------
+_models: "OrderedDict[str, Any]" = OrderedDict()
+_models_lock = threading.Lock()
+_jobs: Dict[str, tuple] = {}
+
+
+def require_supabase():
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
-        
-    try:
-        remote_model_path = f"{model_id}.joblib"
-        res = supabase.storage.from_("models").download(remote_model_path)
-        
-        with open(local_model_path, "wb") as f:
-            f.write(res)
-            
-        return joblib.load(local_model_path)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found or error downloading: {e}")
+    return supabase
+
+
+def get_ready_job(model_id: str) -> dict:
+    if not UUID_RE.match(model_id):
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    cached = _jobs.get(model_id)
+    if cached and time.time() - cached[0] < JOB_CACHE_SECONDS:
+        job = cached[1]
+    else:
+        res = require_supabase().table("training_jobs").select(PUBLIC_JOB_FIELDS).eq("id", model_id).limit(1).execute()
+        job = res.data[0] if res.data else None
+        _jobs[model_id] = (time.time(), job)
+
+    if not job or job["status"] != "ready":
+        # Model was deleted (or isn't trained yet): drop any cached copy
+        with _models_lock:
+            _models.pop(model_id, None)
+        local_path = os.path.join(MODEL_CACHE_DIR, f"{model_id}.joblib")
+        if not job and os.path.exists(local_path):
+            os.remove(local_path)
+        raise HTTPException(status_code=404, detail="Model not found or not ready yet")
+    return job
+
+
+def get_model(model_id: str):
+    """
+    Retrieves the model from memory, the local disk cache, or Supabase Storage.
+    """
+    with _models_lock:
+        if model_id in _models:
+            _models.move_to_end(model_id)
+            return _models[model_id]
+
+    local_model_path = os.path.join(MODEL_CACHE_DIR, f"{model_id}.joblib")
+    if not os.path.exists(local_model_path):
+        try:
+            data = require_supabase().storage.from_("models").download(f"{model_id}.joblib")
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Model file not found: {e}")
+        tmp_path = f"{local_model_path}.part"
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, local_model_path)
+
+    pipeline = joblib.load(local_model_path)
+    with _models_lock:
+        _models[model_id] = pipeline
+        while len(_models) > MAX_MODELS_IN_MEMORY:
+            _models.popitem(last=False)
+    return pipeline
+
+
+# ----------------------------------------------------------------------
+# Routes
+# ----------------------------------------------------------------------
+@app.get("/api/v1/models/{model_id}")
+def model_info(model_id: str):
+    """Public details of a trained model (used by the shareable predictor page)."""
+    job = get_ready_job(model_id)
+    return {k: v for k, v in job.items() if k != "status"}
 
 
 @app.post("/api/v1/models/{model_id}/predict")
@@ -67,36 +194,15 @@ def predict(model_id: str, request: PredictionRequest):
     """
     Returns a prediction for a given model ID.
     """
+    get_ready_job(model_id)
+    pipeline = get_model(model_id)
+
     try:
-        # Load model (pipeline)
-        pipeline = get_model(model_id)
-        
-        # Convert request features to DataFrame (pipeline expects 2D array/df)
-        df_features = pd.DataFrame([request.features])
-        
-        # Predict
-        prediction = pipeline.predict(df_features)
-        
-        # Check if the model has predict_proba (classification)
-        result = {
-            "prediction": prediction.tolist()[0]
-        }
-        
-        if hasattr(pipeline.model, 'predict_proba'):
-            # Some preprocessors/models might fail predict_proba if classes are weird, handle gracefully
-            try:
-                # We need to process X first before calling predict_proba on the internal model
-                X_processed = pipeline.preprocessor.transform(df_features)
-                probabilities = pipeline.model.predict_proba(X_processed)
-                # Find the max probability for the predicted class
-                max_prob = probabilities.max(axis=1)[0]
-                result["probability"] = float(max_prob)
-            except Exception as e:
-                pass
-                
-        return result
-        
+        return pipeline.predict_one(request.features)
+    except (ValueError, TypeError, KeyError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid input: {e}")
     except Exception as e:
+        log.exception("Prediction failed for %s", model_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 

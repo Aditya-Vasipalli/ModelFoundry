@@ -1,26 +1,23 @@
 export default function Loading() {
   return (
-    <div className="min-h-screen grid-bg">
-      <nav className="flex items-center justify-between px-8 py-4 border-b"
-        style={{ borderColor: 'var(--border)', background: 'rgba(8,11,20,0.85)' }}>
-        <div className="text-lg font-bold gradient-text">⚗️ ModelFoundry</div>
-      </nav>
-
-      <div className="max-w-5xl mx-auto px-6 py-10">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>My Models</h1>
-            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Loading...</p>
-          </div>
+    <div className="space-y-6" aria-busy="true" aria-label="Loading">
+      <div className="flex items-end justify-between">
+        <div className="space-y-2">
+          <div className="h-8 w-32 animate-pulse rounded-lg bg-zinc-900" />
+          <div className="h-4 w-24 animate-pulse rounded bg-zinc-900" />
         </div>
-
-        <div className="flex flex-col gap-4">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="glass p-6 h-28 flex items-center justify-center" style={{ opacity: 0.5 }}>
-              <span className="pulse-dot" style={{ background: 'var(--text-muted)' }} />
+        <div className="h-10 w-32 animate-pulse rounded-lg bg-zinc-900" />
+      </div>
+      <div className="space-y-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="card flex items-center gap-3.5 p-5" style={{ opacity: 1 - i * 0.25 }}>
+            <div className="size-10 shrink-0 animate-pulse rounded-lg bg-zinc-800/60" />
+            <div className="flex-1 space-y-2">
+              <div className="h-4 w-48 max-w-full animate-pulse rounded bg-zinc-800/60" />
+              <div className="h-3 w-72 max-w-full animate-pulse rounded bg-zinc-800/40" />
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
     </div>
   )

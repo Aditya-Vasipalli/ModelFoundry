@@ -1,92 +1,90 @@
-import { createClient } from '@/utils/supabase/server'
-import { notFound } from 'next/navigation'
+import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
+import { BackendOfflineError, getPublicModel } from '@/lib/backend'
+import { displayName, isClassification, modelLabel } from '@/lib/models'
+import type { PublicModel } from '@/types'
+import { Logo, MetricGrid, StatusBadge } from '@/components/ui'
+import { ArrowRightIcon, ServerIcon } from '@/components/icons'
 import PredictionForm from '@/components/PredictionForm'
-import { TrainingJob, ClassificationMetrics, RegressionMetrics } from '@/types'
 
-export default async function PublicModelPage({ params }: { params: Promise<{ id: string }> }) {
+type Props = { params: Promise<{ id: string }> }
+
+// Anonymous visitors can't read training_jobs (row-level security), so the
+// shared page gets the model's public details from the backend instead.
+async function loadModel(id: string): Promise<{ model: PublicModel | null; offline: boolean }> {
+  try {
+    return { model: await getPublicModel(id), offline: false }
+  } catch (e) {
+    if (e instanceof BackendOfflineError) return { model: null, offline: true }
+    throw e
+  }
+}
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { model } = await loadModel((await params).id)
+  if (!model) return { title: 'Shared model' }
+  const title = `${displayName(model.dataset_name)} predictor`
+  const description = `Predict ${model.target_column} with a ${modelLabel(model.model_type).toLowerCase()} trained on ModelFoundry.`
+  return { title, description, openGraph: { title, description } }
+}
+
+export default async function PublicModelPage({ params }: Props) {
   const { id } = await params
-  const supabase = await createClient()
-
-  // Fetch the job without checking user authentication
-  const { data: job } = await supabase
-    .from('training_jobs')
-    .select('*')
-    .eq('id', id)
-    .single()
-
-  if (!job || job.status !== 'ready') notFound()
-
-  const typedJob = job as TrainingJob
-  const isClassification = typedJob.model_type.includes('classifier') || typedJob.model_type.includes('logistic')
-  const m = typedJob.metrics
+  const { model, offline } = await loadModel(id)
+  if (!model && !offline) notFound()
 
   return (
-    <div className="min-h-screen grid-bg">
-      <nav className="flex items-center justify-between px-8 py-4 border-b sticky top-0 z-50"
-        style={{ borderColor: 'var(--border)', background: 'rgba(8,11,20,0.85)', backdropFilter: 'blur(20px)' }}>
-        <div className="text-lg font-bold gradient-text">⚗️ ModelFoundry</div>
-        <Link href="/" className="text-xs" style={{ color: 'var(--text-muted)' }}>Powered by ModelFoundry</Link>
-      </nav>
+    <div className="flex min-h-dvh flex-col">
+      <header className="sticky top-0 z-40 border-b border-zinc-900 bg-[#050506]/80 backdrop-blur-xl">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
+          <Logo />
+          <Link href="/login" className="btn btn-secondary btn-sm">
+            Build your own <ArrowRightIcon size={14} />
+          </Link>
+        </div>
+      </header>
 
-      <div className="max-w-4xl mx-auto px-6 py-10">
-        {/* Model Header */}
-        <div className="glass p-6 mb-6">
-          <div className="flex items-start justify-between">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-12">
+        {model ? (
+          <div className="space-y-6">
             <div>
-              <h1 className="text-2xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>
-                {typedJob.dataset_name}
-              </h1>
-              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                {typedJob.model_type.replace(/_/g, ' ')} • Target: <strong>{typedJob.target_column}</strong>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">
+                  {displayName(model.dataset_name)}
+                </h1>
+                <StatusBadge status="ready" label="Live" />
+              </div>
+              <p className="mt-2 text-sm text-zinc-500">
+                {modelLabel(model.model_type)} that predicts <span className="text-zinc-200">{model.target_column}</span>
               </p>
             </div>
-            <span className="status-badge status-ready">
-              <span className="pulse-dot" />Live Model
-            </span>
+            <MetricGrid type={model.model_type} metrics={model.metrics} />
+            <PredictionForm
+              modelId={model.id}
+              isClassification={isClassification(model.model_type)}
+              features={model.features}
+              targetColumn={model.target_column}
+              backendOnline
+            />
           </div>
+        ) : (
+          <div className="card mx-auto flex max-w-md flex-col items-center px-6 py-14 text-center">
+            <span className="mb-5 flex size-12 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-400">
+              <ServerIcon size={20} />
+            </span>
+            <h1 className="text-lg font-semibold text-zinc-100">This model is offline</h1>
+            <p className="mt-2 text-sm text-zinc-400">
+              Its prediction server isn&apos;t running right now. Check back in a little while.
+            </p>
+          </div>
+        )}
+      </main>
 
-          {/* Metrics */}
-          {m && (
-            <div className="flex gap-6 mt-4 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
-              {isClassification ? (
-                <>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Accuracy</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--success)' }}>
-                      {((m as ClassificationMetrics).accuracy * 100).toFixed(1)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>F1 Score</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--success)' }}>
-                      {((m as ClassificationMetrics).f1_score * 100).toFixed(1)}%
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>R² Score</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--success)' }}>
-                      {(m as RegressionMetrics).r2_score.toFixed(3)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>RMSE</div>
-                    <div className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                      {(m as RegressionMetrics).rmse.toFixed(3)}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Prediction Form */}
-        <PredictionForm modelId={id} isClassification={isClassification} features={typedJob.features} />
-      </div>
+      <footer className="border-t border-zinc-900 py-6 text-center text-xs text-zinc-600">
+        Trained and served with{' '}
+        <Link href="/" className="text-zinc-400 hover:text-zinc-200">ModelFoundry</Link>
+      </footer>
     </div>
   )
 }

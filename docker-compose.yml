@@ -1,9 +1,45 @@
+# The whole backend in one command:
+#
+#   docker compose up -d --build
+#
+#   api     FastAPI prediction server
+#   worker  trains models for jobs queued in Supabase
+#   tunnel  Cloudflare quick tunnel that makes the api reachable from the internet.
+#           The api reads the tunnel's URL and publishes it to Supabase, and the
+#           frontend picks it up from there, so there's nothing to copy or redeploy.
+
+x-backend: &backend
+  build: .
+  image: modelfoundry-backend
+  env_file: .env
+  restart: unless-stopped
+
 services:
-  worker:
-    build: .
-    image: modelfoundry-worker
+  api:
+    <<: *backend
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      TUNNEL_METRICS_URL: http://tunnel:2000
     ports:
       - "8000:8000"
-    env_file:
-      - .env
+    volumes:
+      - model-cache:/app/cached_models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: *backend
+    command: ["python", "-u", "worker.py"]
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--metrics", "0.0.0.0:2000", "--url", "http://api:8000"]
     restart: unless-stopped
+    depends_on:
+      - api
+
+volumes:
+  model-cache:
