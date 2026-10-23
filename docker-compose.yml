@@ -28,7 +28,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - model-cache:/app/cached_models
+      - models:/app/cached_models
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)"]
       interval: 30s
@@ -58,4 +58,5 @@ services:
       - api
 
 volumes:
-  model-cache:
+  # Downloaded model files, owned by the image's unprivileged user
+  models:

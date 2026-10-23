@@ -12,6 +12,8 @@ export interface CsvPreview {
   columns: ColumnInfo[]
   rows: string[][]
   estimatedRows: number
+  /** True when only the start of a large file was read, so counts are estimates */
+  sampled: boolean
 }
 
 const MISSING = new Set(['', '?', 'na', 'n/a', 'nan', 'null', 'none', '#n/a'])
@@ -77,7 +79,7 @@ export async function previewCsv(file: File): Promise<CsvPreview> {
 
   const sampleBytes = new Blob([text]).size
   const estimatedRows = truncated ? Math.round((rows.length * file.size) / sampleBytes) : rows.length
-  return { columns, rows: rows.slice(0, 5), estimatedRows }
+  return { columns, rows: rows.slice(0, 5), estimatedRows, sampled: truncated }
 }
 
 /** Parses a whole CSV file into a header and rows of strings. */

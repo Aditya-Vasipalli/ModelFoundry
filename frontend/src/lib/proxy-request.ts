@@ -79,28 +79,31 @@ export async function sessionToken(): Promise<string | null> {
   }
 }
 
-/** Forwards a prediction request to the backend with rate limiting and credentials. */
-export async function forwardToBackend(request: Request, id: string, path: 'predict' | 'predict/batch') {
+/** Forwards a model request to the backend with rate limiting and credentials. */
+export async function forwardToBackend(request: Request, id: string, endpoint: 'info' | 'predict' | 'predict/batch') {
   const limited = rateLimited(request)
   if (limited) return limited
 
-  const body = await request.text()
-  if (body.length > 2 * 1024 * 1024) {
-    return Response.json({ detail: 'Request body too large (max 2 MB)' }, { status: 413, headers: CORS_HEADERS })
-  }
-  try {
-    JSON.parse(body)
-  } catch {
-    const shape = path === 'predict' ? '{"features": {...}}' : '{"rows": [{...}, ...]}'
-    return Response.json({ detail: `Request body must be JSON: ${shape}` }, { status: 400, headers: CORS_HEADERS })
+  const init: RequestInit & { headers: Record<string, string> } = { method: 'GET', headers: await forwardedHeaders(request) }
+  if (endpoint !== 'info') {
+    const body = await request.text()
+    if (body.length > 2 * 1024 * 1024) {
+      return Response.json({ detail: 'Request body too large (max 2 MB)' }, { status: 413, headers: CORS_HEADERS })
+    }
+    try {
+      JSON.parse(body)
+    } catch {
+      const shape = endpoint === 'predict' ? '{"features": {...}}' : '{"rows": [{...}, ...]}'
+      return Response.json({ detail: `Request body must be JSON: ${shape}` }, { status: 400, headers: CORS_HEADERS })
+    }
+    init.method = 'POST'
+    init.headers['Content-Type'] = 'application/json'
+    init.body = body
   }
 
   try {
-    const res = await backendFetch(`/api/v1/models/${encodeURIComponent(id)}/${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(await forwardedHeaders(request)) },
-      body,
-    })
+    const path = `/api/v1/models/${encodeURIComponent(id)}${endpoint === 'info' ? '' : `/${endpoint}`}`
+    const res = await backendFetch(path, init)
     const headers: Record<string, string> = {
       'Content-Type': res.headers.get('Content-Type') ?? 'application/json',
       ...CORS_HEADERS,

@@ -6,7 +6,7 @@ import { sessionToken } from '@/lib/proxy-request'
 import { displayName, isClassification, jobModelLabel, modelLabel } from '@/lib/models'
 import type { PublicModel } from '@/types'
 import { Logo, MetricGrid, StatusBadge } from '@/components/ui'
-import { ArrowRightIcon, ServerIcon } from '@/components/icons'
+import { ArrowRightIcon, LockIcon, ServerIcon } from '@/components/icons'
 import PredictionForm from '@/components/PredictionForm'
 import { FeatureImportanceChart } from '@/components/charts'
 
@@ -62,6 +62,12 @@ export default async function PublicModelPage({ params }: Props) {
                 {jobModelLabel(model)} that predicts <span className="text-zinc-200">{model.target_column}</span>
               </p>
             </div>
+            {model.is_public === false && (
+              <p className="flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">
+                <LockIcon size={14} className="mt-0.5 shrink-0" />
+                This model is private, so only you can see this page. Make it public in the model’s settings to share the link.
+              </p>
+            )}
             <MetricGrid type={model.model_type} metrics={model.metrics} />
             <PredictionForm
               modelId={model.id}

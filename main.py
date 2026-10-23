@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 import re
@@ -35,7 +36,7 @@ HEARTBEAT_SECONDS = 60
 
 MODEL_CACHE_DIR = "./cached_models"
 MAX_MODELS_IN_MEMORY = 20
-JOB_CACHE_SECONDS = 30
+JOB_CACHE_SECONDS = 10  # how quickly visibility changes and deletions reach the API
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_FEATURES = 500
 MAX_BATCH_ROWS = 1000
@@ -171,7 +172,10 @@ def get_ready_job(model_id: str, identity: Optional[Identity]) -> dict:
             _models.pop(model_id, None)
         local_path = os.path.join(MODEL_CACHE_DIR, f"{model_id}.joblib")
         if not job and os.path.exists(local_path):
-            os.remove(local_path)
+            try:
+                os.remove(local_path)
+            except OSError as e:
+                log.warning("Could not remove cached model %s: %s", local_path, e)
         raise HTTPException(status_code=404, detail="Model not found or not ready yet")
 
     if not job.get("is_public", True):
@@ -192,17 +196,26 @@ def get_model(model_id: str):
             return _models[model_id]
 
     local_model_path = os.path.join(MODEL_CACHE_DIR, f"{model_id}.joblib")
-    if not os.path.exists(local_model_path):
+    pipeline = None
+    if os.path.exists(local_model_path):
+        try:
+            pipeline = joblib.load(local_model_path)
+        except Exception as e:
+            log.warning("Cached model %s is unreadable (%s); downloading it again", local_model_path, e)
+    if pipeline is None:
         try:
             data = require_supabase().storage.from_("models").download(f"{model_id}.joblib")
         except Exception as e:
             raise HTTPException(status_code=404, detail=f"Model file not found: {e}")
-        tmp_path = f"{local_model_path}.part"
-        with open(tmp_path, "wb") as f:
-            f.write(data)
-        os.replace(tmp_path, local_model_path)
-
-    pipeline = joblib.load(local_model_path)
+        try:
+            tmp_path = f"{local_model_path}.part"
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            os.replace(tmp_path, local_model_path)
+        except OSError as e:
+            # A read-only or wrongly owned cache only costs a re-download later
+            log.warning("Model cache %s is not writable (%s); serving from memory", MODEL_CACHE_DIR, e)
+        pipeline = joblib.load(io.BytesIO(data))
     with _models_lock:
         _models[model_id] = pipeline
         while len(_models) > MAX_MODELS_IN_MEMORY:

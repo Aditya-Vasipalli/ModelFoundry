@@ -156,7 +156,7 @@ export default function UploadForm() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-zinc-100">{file.name}</p>
                 <p className="text-xs text-zinc-500">
-                  {formatBytes(file.size)} · {preview.columns.length} columns · ≈{preview.estimatedRows.toLocaleString('en-US')} rows
+                  {formatBytes(file.size)} · {preview.columns.length} columns · {preview.sampled ? '≈' : ''}{preview.estimatedRows.toLocaleString('en-US')} rows
                 </p>
               </div>
               <button type="button" onClick={() => fileRef.current?.click()} className="btn btn-secondary btn-sm">
@@ -224,7 +224,7 @@ export default function UploadForm() {
           {target && (
             <p className="mt-2 text-xs text-zinc-500">
               {target.kind === 'numeric' ? 'Numeric' : 'Text'} column with {target.distinct}
-              {preview.estimatedRows > preview.rows.length ? '+' : ''} distinct values — looks like a{' '}
+              {preview.sampled ? '+' : ''} distinct value{target.distinct === 1 ? '' : 's'} — looks like a{' '}
               <span className="text-zinc-300">{target.task}</span> problem.
               {target.kind === 'text' && target.distinct > 50 && ' That is a lot of classes; accuracy may be low.'}
             </p>

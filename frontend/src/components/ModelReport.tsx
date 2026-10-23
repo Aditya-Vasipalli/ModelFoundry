@@ -17,7 +17,7 @@ function Card({ title, subtitle, children, className = '' }: {
   className?: string
 }) {
   return (
-    <section className={`card p-5 sm:p-6 ${className}`}>
+    <section className={`card min-w-0 p-5 sm:p-6 ${className}`}>
       <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
       {subtitle && <p className="mt-1 text-xs leading-relaxed text-zinc-500">{subtitle}</p>}
       <div className="mt-4">{children}</div>
@@ -30,7 +30,7 @@ export default function ModelReport({ report, target }: { report: Report; target
   const dropped = Object.entries(dataset.dropped).filter(([, cols]) => cols.length > 0)
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       {report.leaderboard && report.leaderboard.length > 0 && (
         <Card
           title="Model comparison"

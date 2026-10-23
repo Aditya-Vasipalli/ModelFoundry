@@ -131,3 +131,24 @@ def test_authenticator_resolves_api_keys_and_rejects_bad_ones():
     with pytest.raises(HTTPException) as e:
         auth.identify(make_request({'X-API-Key': 'mf_wrong'}))
     assert e.value.status_code == 401
+
+
+def test_get_model_survives_an_unwritable_cache(monkeypatch, tmp_path):
+    import io
+    import joblib
+    buf = io.BytesIO()
+    joblib.dump({'a': 1}, buf)
+    storage = SimpleNamespace(download=lambda path: buf.getvalue())
+    fake = SimpleNamespace(storage=SimpleNamespace(from_=lambda bucket: storage))
+    monkeypatch.setattr(main, 'require_supabase', lambda: fake)
+    monkeypatch.setattr(main, 'MODEL_CACHE_DIR', str(tmp_path / 'missing'))
+    main._models.pop(MODEL_ID, None)
+    assert main.get_model(MODEL_ID) == {'a': 1}
+
+    # A corrupt cached file is replaced by a fresh download
+    main._models.pop(MODEL_ID, None)
+    monkeypatch.setattr(main, 'MODEL_CACHE_DIR', str(tmp_path))
+    (tmp_path / f'{MODEL_ID}.joblib').write_bytes(b'not a model')
+    assert main.get_model(MODEL_ID) == {'a': 1}
+    assert joblib.load(tmp_path / f'{MODEL_ID}.joblib') == {'a': 1}
+    main._models.pop(MODEL_ID, None)

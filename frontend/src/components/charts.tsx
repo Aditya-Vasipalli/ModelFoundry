@@ -125,31 +125,44 @@ export function ConfusionMatrix({ labels, matrix }: { labels: (string | number)[
 // ---------------------------------------------------------------------------
 // Predicted vs actual (regression)
 // ---------------------------------------------------------------------------
-function niceBounds(values: number[]) {
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const pad = (max - min) * 0.05 || Math.abs(max) * 0.05 || 1
-  return [min - pad, max + pad] as const
+/** Round axis bounds and ~5 evenly spaced ticks that land on 1/2/5 × 10ⁿ. */
+function niceScale(values: number[]) {
+  let min = Math.min(...values)
+  let max = Math.max(...values)
+  if (min === max) {
+    const pad = Math.abs(min) * 0.1 || 1
+    min -= pad
+    max += pad
+  }
+  const raw = (max - min) / 4
+  const magnitude = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= raw) ?? raw
+  const lo = Math.floor(min / step) * step
+  const hi = Math.ceil(max / step) * step
+  const ticks: number[] = []
+  for (let t = lo; t <= hi + step / 2; t += step) ticks.push(Number(t.toPrecision(12)))
+  return { lo, hi, ticks }
 }
 
-const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 })
+const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
+const precise = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 5 })
 
 export function PredictionScatter({ points, target }: { points: [number, number][]; target: string }) {
   const { box, show, hide, overlay } = useTooltip()
-  const W = 560, H = 340, L = 56, R = 16, T = 16, B = 40
-  const [lo, hi] = useMemo(() => niceBounds(points.flat()), [points])
+  // A compact viewBox keeps the labels legible when the chart is phone-width
+  const W = 440, H = 320, L = 64, R = 22, T = 12, B = 44
+  const { lo, hi, ticks } = useMemo(() => niceScale(points.flat()), [points])
   const sx = (v: number) => L + ((v - lo) / (hi - lo)) * (W - L - R)
   const sy = (v: number) => H - B - ((v - lo) / (hi - lo)) * (H - T - B)
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => lo + f * (hi - lo))
 
   return (
     <div ref={box} className="relative">
       <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label={`Predicted versus actual ${target} on ${points.length} test rows`}>
-        {ticks.map((t) => (
+        {ticks.map((t, i) => (
           <g key={t}>
             <line x1={L} x2={W - R} y1={sy(t)} y2={sy(t)} stroke="#27272a" strokeWidth={1} />
-            <text x={L - 8} y={sy(t) + 4} textAnchor="end" className="fill-zinc-500 text-[11px]">{compact.format(t)}</text>
-            <text x={sx(t)} y={H - B + 18} textAnchor="middle" className="fill-zinc-500 text-[11px]">{compact.format(t)}</text>
+            <text x={L - 8} y={sy(t) + 4} textAnchor="end" className="fill-zinc-500 text-[12px]">{compact.format(t)}</text>
+            <text x={sx(t)} y={H - B + 18} textAnchor={i === ticks.length - 1 ? 'end' : 'middle'} className="fill-zinc-500 text-[12px]">{compact.format(t)}</text>
           </g>
         ))}
         <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="#3f3f46" strokeWidth={1} />
@@ -165,12 +178,12 @@ export function PredictionScatter({ points, target }: { points: [number, number]
             fillOpacity={0.75}
             stroke={SURFACE}
             strokeWidth={1}
-            onPointerMove={(e) => show(e, <>Actual <b className="text-zinc-100">{compact.format(actual)}</b> · predicted <b className="text-zinc-100">{compact.format(predicted)}</b></>)}
+            onPointerMove={(e) => show(e, <>Actual <b className="text-zinc-100">{precise.format(actual)}</b> · predicted <b className="text-zinc-100">{precise.format(predicted)}</b></>)}
             onPointerLeave={hide}
           />
         ))}
-        <text x={(L + W - R) / 2} y={H - 4} textAnchor="middle" className="fill-zinc-400 text-[12px]">Actual {target}</text>
-        <text x={14} y={(T + H - B) / 2} textAnchor="middle" transform={`rotate(-90 14 ${(T + H - B) / 2})`} className="fill-zinc-400 text-[12px]">Predicted</text>
+        <text x={(L + W - R) / 2} y={H - 6} textAnchor="middle" className="fill-zinc-400 text-[13px]">Actual {target}</text>
+        <text x={12} y={(T + H - B) / 2} textAnchor="middle" transform={`rotate(-90 12 ${(T + H - B) / 2})`} className="fill-zinc-400 text-[13px]">Predicted</text>
       </svg>
       <p className="mt-1 text-xs text-zinc-500">Each dot is a test row. Dots on the dashed line were predicted exactly.</p>
       {overlay}
