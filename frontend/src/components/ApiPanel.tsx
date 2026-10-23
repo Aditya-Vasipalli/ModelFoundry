@@ -8,6 +8,11 @@ import { CodeIcon, LockIcon } from './icons'
 
 type Lang = 'curl' | 'javascript' | 'python'
 
+const ENDPOINTS = [
+  { path: '/predict', label: 'One row', hint: '{"features": {...}}' },
+  { path: '/predict/batch', label: 'Batch', hint: 'up to 1,000 rows' },
+]
+
 function examplePayload(features: FeatureSchema[]) {
   const values: Record<string, string | number> = {}
   for (const f of features) {
@@ -24,6 +29,7 @@ export default function ApiPanel({ endpoint, features, isClassification, isPubli
   isPublic: boolean
 }) {
   const [lang, setLang] = useState<Lang>('curl')
+  const base = endpoint.replace(/\/predict$/, '')
   const body = JSON.stringify(examplePayload(features), null, 2)
   const indented = (n: number) => body.split('\n').join('\n' + ' '.repeat(n))
   const key = 'YOUR_API_KEY'
@@ -63,13 +69,21 @@ export default function ApiPanel({ endpoint, features, isClassification, isPubli
 
       <div className="space-y-5 p-5 sm:p-6">
         <div className="space-y-2">
-          {[['', 'One row'], ['/batch', 'Up to 1,000 rows: {"rows": [...]}']].map(([suffix, hint]) => (
-            <div key={suffix} className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-1.5 pl-3">
-              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-emerald-300">POST</span>
-              <code className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300 sm:text-[13px]" title={`${endpoint}${suffix} — ${hint}`}>
-                {endpoint}{suffix}
-              </code>
-              <CopyButton value={`${endpoint}${suffix}`} label="" className="btn btn-ghost btn-sm btn-icon w-8" />
+          {ENDPOINTS.map(({ path, label, hint }) => (
+            <div key={path} className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 py-2 pr-1.5 pl-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-emerald-300">POST</span>
+                  <span className="text-xs font-medium text-zinc-200">{label}</span>
+                  <span className="min-w-0 truncate text-xs text-zinc-500">{hint}</span>
+                </div>
+                {/* The model URL shortens in the middle so the endpoint path stays readable */}
+                <code className="mt-1.5 flex min-w-0 font-mono text-xs text-zinc-500 sm:text-[13px]" title={`${base}${path}`}>
+                  <span className="truncate">{base}</span>
+                  <span className="shrink-0 text-zinc-200">{path}</span>
+                </code>
+              </div>
+              <CopyButton value={`${base}${path}`} label="" className="btn btn-ghost btn-sm btn-icon w-8 shrink-0" />
             </div>
           ))}
         </div>
