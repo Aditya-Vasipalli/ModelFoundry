@@ -21,6 +21,7 @@ const STATUS_STYLES: Record<JobStatus, { label: string; className: string; dot: 
   processing: { label: 'Training', className: 'border-amber-500/25 bg-amber-500/10 text-amber-300', dot: 'bg-amber-400 animate-pulse' },
   ready: { label: 'Ready', className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300', dot: 'bg-emerald-400' },
   failed: { label: 'Failed', className: 'border-red-500/25 bg-red-500/10 text-red-300', dot: 'bg-red-400' },
+  cancelled: { label: 'Cancelled', className: 'border-zinc-700 bg-zinc-800/50 text-zinc-400', dot: 'bg-zinc-500' },
 }
 
 export function StatusBadge({ status, label }: { status: JobStatus; label?: string }) {

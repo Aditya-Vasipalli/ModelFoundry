@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { getUser } from '@/utils/supabase/server'
 import { Logo } from '@/components/ui'
 import {
-  ArrowRightIcon, ChartIcon, CodeIcon, GithubIcon, LinkIcon, ServerIcon, ShieldIcon, TargetIcon, UploadIcon, WandIcon, ZapIcon,
+  ArrowRightIcon, ChartIcon, CodeIcon, GaugeIcon, GithubIcon, ServerIcon, ShieldIcon, TargetIcon, UploadIcon, WandIcon, ZapIcon,
 } from '@/components/icons'
 
 const GITHUB_URL = 'https://github.com/Aditya-Vasipalli/ModelFoundry'
@@ -10,15 +10,15 @@ const GITHUB_URL = 'https://github.com/Aditya-Vasipalli/ModelFoundry'
 const STEPS = [
   { icon: UploadIcon, title: 'Upload a CSV', desc: 'Drop in any table with a header row — comma, semicolon or tab separated.' },
   { icon: TargetIcon, title: 'Pick what to predict', desc: 'Choose the target column. We suggest the right kind of model for it.' },
-  { icon: ZapIcon, title: 'Predict anywhere', desc: 'Use the generated form, share a public link, or call the REST endpoint.' },
+  { icon: ZapIcon, title: 'Predict anywhere', desc: 'Use the generated form, score a whole CSV, share a public link, or call the REST endpoint.' },
 ]
 
 const FEATURES = [
-  { icon: WandIcon, title: 'Automatic preprocessing', desc: 'Missing values, categorical encoding, outliers, scaling and feature selection — handled for you.' },
-  { icon: ChartIcon, title: 'Classification & regression', desc: 'Random forests, logistic and linear regression, evaluated on a held-out test split.' },
-  { icon: CodeIcon, title: 'Instant REST endpoint', desc: 'Every trained model gets a stable URL that accepts JSON and returns predictions.' },
-  { icon: LinkIcon, title: 'Shareable predictor', desc: 'A public page with a form generated from your columns — send it to anyone.' },
-  { icon: ShieldIcon, title: 'Private by default', desc: 'Datasets are deleted right after training. Models stay private until you share them.' },
+  { icon: WandIcon, title: 'Auto mode', desc: 'Compares 7 algorithms with cross-validation and keeps the best, with a leaderboard to show its work.' },
+  { icon: ChartIcon, title: '17 algorithms', desc: 'Gradient boosting, random forests, SVMs, k-NN, naive Bayes, ridge, lasso and more, for classification and regression.' },
+  { icon: GaugeIcon, title: 'Explained results', desc: 'Feature importance, confusion matrix or predicted-vs-actual, cross-validated scores and a dataset summary.' },
+  { icon: CodeIcon, title: 'REST API & batch scoring', desc: 'A stable endpoint per model, batch predictions for up to 1,000 rows, and CSV in, CSV out from the dashboard.' },
+  { icon: ShieldIcon, title: 'Private models & API keys', desc: 'Keep a model private and call it with hashed API keys. Datasets are deleted right after training.' },
   { icon: ServerIcon, title: 'Runs on your hardware', desc: 'One docker compose command runs the trainer and API, exposed through a secure tunnel.' },
 ]
 
@@ -90,6 +90,7 @@ export default async function LandingPage() {
           <Logo />
           <nav className="flex items-center gap-1 sm:gap-2">
             <a href="#how" className="btn btn-ghost btn-sm hidden sm:inline-flex">How it works</a>
+            <Link href="/docs" className="btn btn-ghost btn-sm hidden sm:inline-flex">Docs</Link>
             <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm btn-icon w-8 sm:w-auto sm:px-3" aria-label="GitHub">
               <GithubIcon /> <span className="hidden sm:inline">GitHub</span>
             </a>

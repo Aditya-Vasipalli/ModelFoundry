@@ -1,9 +1,10 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 import type { FeatureSchema } from '@/types'
 import CopyButton from './CopyButton'
-import { CodeIcon } from './icons'
+import { CodeIcon, LockIcon } from './icons'
 
 type Lang = 'curl' | 'javascript' | 'python'
 
@@ -16,19 +17,26 @@ function examplePayload(features: FeatureSchema[]) {
   return { features: values }
 }
 
-export default function ApiPanel({ endpoint, features, isClassification }: {
+export default function ApiPanel({ endpoint, features, isClassification, isPublic }: {
   endpoint: string
   features: FeatureSchema[]
   isClassification: boolean
+  isPublic: boolean
 }) {
   const [lang, setLang] = useState<Lang>('curl')
   const body = JSON.stringify(examplePayload(features), null, 2)
   const indented = (n: number) => body.split('\n').join('\n' + ' '.repeat(n))
+  const key = 'YOUR_API_KEY'
 
   const snippets: Record<Lang, string> = {
-    curl: `curl -X POST ${endpoint} \\\n  -H "Content-Type: application/json" \\\n  -d '${body.replace(/'/g, "'\\''")}'`,
-    javascript: `const res = await fetch("${endpoint}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify(${indented(2)}),\n});\nconst { prediction${isClassification ? ', probability' : ''} } = await res.json();`,
-    python: `import requests\n\nres = requests.post(\n    "${endpoint}",\n    json=${indented(4)},\n)\nprint(res.json())`,
+    curl: [
+      `curl -X POST ${endpoint} \\`,
+      `  -H "Content-Type: application/json" \\`,
+      ...(isPublic ? [] : [`  -H "X-API-Key: ${key}" \\`]),
+      `  -d '${body.replace(/'/g, "'\\''")}'`,
+    ].join('\n'),
+    javascript: `const res = await fetch("${endpoint}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json"${isPublic ? '' : `, "X-API-Key": "${key}"`} },\n  body: JSON.stringify(${indented(2)}),\n});\nconst { prediction${isClassification ? ', probability' : ''} } = await res.json();`,
+    python: `import requests\n\nres = requests.post(\n    "${endpoint}",\n    json=${indented(4)},${isPublic ? '' : `\n    headers={"X-API-Key": "${key}"},`}\n)\nprint(res.json())`,
   }
   const response = isClassification
     ? '{ "prediction": …, "probability": 0.93, "probabilities": [{ "label": …, "probability": 0.93 }, …] }'
@@ -36,20 +44,34 @@ export default function ApiPanel({ endpoint, features, isClassification }: {
 
   return (
     <section className="card overflow-hidden">
-      <div className="flex flex-col gap-3 border-b border-zinc-800 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-        <div>
-          <h2 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
-            <CodeIcon className="text-zinc-400" /> REST API
-          </h2>
-          <p className="mt-1 text-sm text-zinc-400">Call this model from any app. No API key needed.</p>
-        </div>
+      <div className="border-b border-zinc-800 p-5 sm:p-6">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
+          <CodeIcon className="text-zinc-400" /> REST API
+        </h2>
+        <p className="mt-1 text-sm text-zinc-400">
+          {isPublic ? (
+            <>Call this model from any app — no key needed. <Link href="/docs" className="text-zinc-200 underline decoration-zinc-600 underline-offset-4">API docs</Link></>
+          ) : (
+            <span className="inline-flex flex-wrap items-center gap-1">
+              <LockIcon size={13} className="text-zinc-500" /> Private model: send an{' '}
+              <Link href="/dashboard/settings" className="text-zinc-200 underline decoration-zinc-600 underline-offset-4">API key</Link>{' '}
+              in the <code className="kbd">X-API-Key</code> header.
+            </span>
+          )}
+        </p>
       </div>
 
       <div className="space-y-5 p-5 sm:p-6">
-        <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-1.5 pl-3">
-          <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-emerald-300">POST</span>
-          <code className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300 sm:text-[13px]" title={endpoint}>{endpoint}</code>
-          <CopyButton value={endpoint} label="" className="btn btn-ghost btn-sm btn-icon w-8" />
+        <div className="space-y-2">
+          {[['', 'One row'], ['/batch', 'Up to 1,000 rows: {"rows": [...]}']].map(([suffix, hint]) => (
+            <div key={suffix} className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-1.5 pl-3">
+              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-emerald-300">POST</span>
+              <code className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300 sm:text-[13px]" title={`${endpoint}${suffix} — ${hint}`}>
+                {endpoint}{suffix}
+              </code>
+              <CopyButton value={`${endpoint}${suffix}`} label="" className="btn btn-ghost btn-sm btn-icon w-8" />
+            </div>
+          ))}
         </div>
 
         <div>

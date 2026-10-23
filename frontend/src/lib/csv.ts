@@ -16,7 +16,7 @@ export interface CsvPreview {
 
 const MISSING = new Set(['', '?', 'na', 'n/a', 'nan', 'null', 'none', '#n/a'])
 
-function detectDelimiter(firstLine: string) {
+export function detectDelimiter(firstLine: string) {
   const candidates = [',', ';', '\t', '|']
   let best = ',', bestCount = 0
   for (const d of candidates) {
@@ -31,7 +31,7 @@ function detectDelimiter(firstLine: string) {
 }
 
 /** RFC-4180-ish parser: quoted fields, escaped quotes, newlines inside quotes. */
-function parseRows(text: string, delimiter: string): string[][] {
+export function parseRows(text: string, delimiter: string): string[][] {
   const rows: string[][] = []
   let row: string[] = [], field = '', quoted = false
   for (let i = 0; i < text.length; i++) {
@@ -78,4 +78,21 @@ export async function previewCsv(file: File): Promise<CsvPreview> {
   const sampleBytes = new Blob([text]).size
   const estimatedRows = truncated ? Math.round((rows.length * file.size) / sampleBytes) : rows.length
   return { columns, rows: rows.slice(0, 5), estimatedRows }
+}
+
+/** Parses a whole CSV file into a header and rows of strings. */
+export async function parseCsv(file: File): Promise<{ header: string[]; rows: string[][] }> {
+  const text = (await file.text()).replace(/^\uFEFF/, '')
+  const delimiter = detectDelimiter(text.split(/\r?\n/, 1)[0] ?? '')
+  const [header = [], ...rows] = parseRows(text, delimiter)
+  return { header: header.map((h, i) => h.trim() || `column_${i + 1}`), rows }
+}
+
+/** Serialises rows to CSV, quoting fields that need it. */
+export function toCsv(header: string[], rows: (string | number | boolean | null | undefined)[][]) {
+  const cell = (v: string | number | boolean | null | undefined) => {
+    const s = v == null ? '' : String(v)
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  return [header, ...rows].map((r) => r.map(cell).join(',')).join('\r\n')
 }

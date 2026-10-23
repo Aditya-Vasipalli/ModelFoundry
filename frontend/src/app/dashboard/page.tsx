@@ -2,103 +2,38 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { createClient, getUser } from '@/utils/supabase/server'
 import { getBackendStatus } from '@/lib/backend'
-import { displayName, formatRelative, isClassification, metricItems, modelLabel } from '@/lib/models'
 import type { TrainingJob } from '@/types'
-import { BackendPill, Notice, StatusBadge } from '@/components/ui'
-import { ArrowRightIcon, ChartIcon, PlusIcon, ServerIcon, Spinner, TagsIcon, UploadIcon } from '@/components/icons'
+import { BackendPill, Notice } from '@/components/ui'
+import { PlusIcon, ServerIcon, UploadIcon } from '@/components/icons'
 import AutoRefresh from '@/components/AutoRefresh'
-import CopyButton from '@/components/CopyButton'
-import DeleteModelButton from '@/components/DeleteModelButton'
+import ModelList from '@/components/ModelList'
 
 export const metadata: Metadata = { title: 'Models' }
 
 const SAMPLE_DATASET = 'https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv'
-
-function JobCard({ job, workerOnline }: { job: TrainingJob; workerOnline: boolean }) {
-  const classification = isClassification(job.model_type)
-  const metrics = metricItems(job.model_type, job.metrics).slice(0, 2)
-  const href = `/dashboard/model/${job.id}`
-
-  return (
-    <li className="card card-interactive flex flex-col gap-4 p-4 sm:p-5 md:flex-row md:items-center md:gap-6">
-      <div className="flex min-w-0 flex-1 items-start gap-3.5">
-        <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-400">
-          {classification ? <TagsIcon size={18} /> : <ChartIcon size={18} />}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <Link href={href} className="truncate text-[15px] font-medium text-zinc-100 hover:underline hover:decoration-zinc-600 hover:underline-offset-4">
-              {displayName(job.dataset_name)}
-            </Link>
-            <StatusBadge status={job.status} />
-          </div>
-          <p className="mt-1 truncate text-xs text-zinc-500">
-            {modelLabel(job.model_type)} · predicts <span className="text-zinc-300">{job.target_column}</span> · {formatRelative(job.created_at)}
-          </p>
-
-          {job.status === 'ready' && metrics.length > 0 && (
-            <p className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-              {metrics.map((m) => (
-                <span key={m.key}>
-                  {m.label} <span className={`font-mono font-medium ${m.tone === 'good' ? 'text-emerald-300' : 'text-zinc-200'}`}>{m.value}</span>
-                </span>
-              ))}
-            </p>
-          )}
-          {job.status === 'failed' && job.error_message && (
-            <p className="mt-2.5 line-clamp-2 text-xs text-red-300/90">{job.error_message}</p>
-          )}
-          {(job.status === 'pending' || job.status === 'processing') && (
-            <p className="mt-2.5 flex items-center gap-2 text-xs text-zinc-500">
-              {job.status === 'processing' ? (
-                <><Spinner size={12} className="text-amber-300" /> Training on your backend…</>
-              ) : workerOnline ? (
-                <><Spinner size={12} /> Starting shortly…</>
-              ) : (
-                'Waiting for the backend to come online'
-              )}
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 border-t border-zinc-800/80 pt-4 md:border-0 md:pt-0">
-        {job.status === 'ready' && (
-          <>
-            <Link href={href} className="btn btn-primary btn-sm flex-1 md:flex-none">
-              Open <ArrowRightIcon size={14} />
-            </Link>
-            <CopyButton
-              value={`/share/model/${job.id}`}
-              absolute
-              label="Share link"
-              copiedLabel="Link copied"
-              className="btn btn-secondary btn-sm flex-1 md:flex-none"
-            />
-          </>
-        )}
-        <DeleteModelButton id={job.id} className={job.status === 'ready' ? 'flex-1 md:flex-none' : 'ml-auto'} />
-      </div>
-    </li>
-  )
-}
+// Large JSON columns the list doesn't need
+const LIST_COLUMNS =
+  'id,user_id,dataset_name,dataset_path,target_column,model_type,status,metrics,progress,attempts,is_public,error_message,created_at,updated_at,started_at,finished_at,report->model_label'
 
 export default async function DashboardPage() {
   const user = await getUser()
   const supabase = await createClient()
-  const [{ data }, backend] = await Promise.all([
-    supabase.from('training_jobs').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+  const [{ data, error }, backend] = await Promise.all([
+    supabase.from('training_jobs').select(LIST_COLUMNS).eq('user_id', user!.id).order('created_at', { ascending: false }),
     getBackendStatus(),
   ])
 
-  const jobs = (data ?? []) as TrainingJob[]
+  const jobs = ((data ?? []) as unknown as (TrainingJob & { model_label?: string })[]).map((j) => ({
+    ...j,
+    report: j.model_label ? ({ model_label: j.model_label } as TrainingJob['report']) : null,
+  }))
   const readyCount = jobs.filter((j) => j.status === 'ready').length
   const active = jobs.some((j) => j.status === 'pending' || j.status === 'processing')
   const online = backend.apiOnline && backend.workerOnline
 
   return (
     <div className="space-y-6">
-      <AutoRefresh intervalMs={active ? 4000 : 30000} />
+      <AutoRefresh intervalMs={active ? 3000 : 30000} />
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -114,6 +49,10 @@ export default async function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {error && (
+        <Notice tone="error" title="Couldn’t load your models">{error.message}</Notice>
+      )}
 
       {!online && (
         <Notice tone="warning" icon={<ServerIcon />} title="Your backend is offline">
@@ -139,11 +78,7 @@ export default async function DashboardPage() {
           </a>
         </div>
       ) : (
-        <ul className="space-y-3">
-          {jobs.map((job) => (
-            <JobCard key={job.id} job={job} workerOnline={backend.workerOnline} />
-          ))}
-        </ul>
+        <ModelList jobs={jobs} workerOnline={backend.workerOnline} />
       )}
     </div>
   )

@@ -89,6 +89,9 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         self.dropped_id_like_: list = []
         self.category_modes_: dict = {}
         self.feature_stats_: dict = {}
+        self.dropped_low_signal_: list = []
+        self.dropped_collinear_: list = []
+        self.outlier_rows_removed_: int = 0
         self.scaler_ = MinMaxScaler()
         self.power_transformer_ = PowerTransformer(method='yeo-johnson') if is_regression else None
 
@@ -195,6 +198,7 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
     # Step 4: Remove outlier ROWS (training only, not applied at inference)
     # ------------------------------------------------------------------
     def _remove_outlier_rows(self, df: pd.DataFrame, y: pd.Series):
+        self.outlier_rows_removed_ = 0
         continuous = [c for c in df.columns if c not in self.label_encoders_ and df[c].nunique() > 10]
         if not continuous:
             return df, y
@@ -204,6 +208,7 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         mask = (z_scores < self.outlier_z).all(axis=1)
         if mask.mean() < 1 - MAX_OUTLIER_FRACTION:
             return df, y
+        self.outlier_rows_removed_ = int((~mask).sum())
         return df[mask].reset_index(drop=True), y[mask].reset_index(drop=True)
 
     # ------------------------------------------------------------------
@@ -239,6 +244,7 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         if not keep:
             keep = [df.columns[0]]  # Always keep at least one feature
 
+        self.dropped_low_signal_ = [c for c in df.columns if c not in keep]
         return df[keep], keep
 
     # ------------------------------------------------------------------
@@ -255,6 +261,7 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         if not keep:
             keep = [df.columns[0]]
 
+        self.dropped_collinear_ = [c for c in df.columns if c not in keep]
         return df[keep], keep
 
     # ------------------------------------------------------------------
@@ -275,6 +282,15 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
                 "default": round(median) if is_integer else round(median, 4),
                 "integer": is_integer,
             }
+
+    def dropped_columns(self) -> dict:
+        """Columns removed during fitting, grouped by reason (for the model report)."""
+        return {
+            "id_like": [str(c) for c in getattr(self, 'dropped_id_like_', [])],
+            "high_cardinality": [str(c) for c in getattr(self, 'dropped_high_cardinality_', [])],
+            "low_signal": [str(c) for c in getattr(self, 'dropped_low_signal_', [])],
+            "collinear": [str(c) for c in getattr(self, 'dropped_collinear_', [])],
+        }
 
     def feature_schema(self) -> list:
         stats = getattr(self, 'feature_stats_', {})

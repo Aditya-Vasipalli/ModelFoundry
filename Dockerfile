@@ -11,10 +11,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Copy application code (see .dockerignore)
-COPY . .
-RUN chmod +x start.sh && mkdir -p cached_models
+# Run as an unprivileged user
+RUN useradd --create-home --uid 10001 app
 
+# Copy application code (see .dockerignore)
+COPY --chown=app:app . .
+RUN chmod +x start.sh && mkdir -p cached_models temp_models && chown -R app:app /app
+
+USER app
 EXPOSE 8000
 
 # Default: API + worker in one container (for single-container hosts).

@@ -100,10 +100,15 @@ export async function backendFetch(path: string, init: RequestInit = {}): Promis
   throw new BackendOfflineError()
 }
 
-/** Public details of a ready model, or null if it doesn't exist. */
-export const getPublicModel = cache(async (id: string): Promise<PublicModel | null> => {
-  const res = await backendFetch(`/api/v1/models/${encodeURIComponent(id)}`)
-  if (res.status === 404) return null
+/** Model details from the backend: null when it doesn't exist (or is private and not ours). */
+export async function fetchModelInfo(id: string, headers: HeadersInit = {}): Promise<PublicModel | null> {
+  const res = await backendFetch(`/api/v1/models/${encodeURIComponent(id)}`, { headers })
+  if (res.status === 404 || res.status === 401) return null
   if (!res.ok) throw new Error(`Backend error ${res.status}`)
   return res.json()
-})
+}
+
+/** Same, deduplicated per request; `token` lets owners see their private models. */
+export const getPublicModel = cache((id: string, token?: string | null) =>
+  fetchModelInfo(id, token ? { Authorization: `Bearer ${token}` } : {})
+)

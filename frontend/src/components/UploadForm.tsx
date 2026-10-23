@@ -4,15 +4,17 @@ import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
 import type { ModelType } from '@/types'
-import { MODEL_TYPES, type Task } from '@/lib/models'
+import { AUTO_MODEL, MODEL_TYPES, type Speed, type Task } from '@/lib/models'
 import { previewCsv, type CsvPreview } from '@/lib/csv'
-import { AlertIcon, ArrowRightIcon, FileIcon, Spinner, UploadIcon } from './icons'
+import { AlertIcon, ArrowRightIcon, FileIcon, Spinner, UploadIcon, WandIcon } from './icons'
 
 const MAX_BYTES = 50 * 1024 * 1024
 const TASKS: { task: Task; title: string; blurb: string }[] = [
-  { task: 'classification', title: 'Classification', blurb: 'Predict a category — yes/no, species, churn…' },
-  { task: 'regression', title: 'Regression', blurb: 'Predict a number — price, demand, score…' },
+  { task: 'classification', title: 'Classification', blurb: 'Predict a category: yes/no, species, churn…' },
+  { task: 'regression', title: 'Regression', blurb: 'Predict a number: price, demand, score…' },
 ]
+const SPEED: Record<Speed, string> = { fast: 'Fast', medium: 'Medium', slow: 'Slower' }
+const TEST_SPLITS = [0.1, 0.2, 0.3, 0.4]
 
 function formatBytes(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -38,8 +40,11 @@ export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<CsvPreview | null>(null)
   const [targetColumn, setTargetColumn] = useState('')
+  const [task, setTask] = useState<Task>('classification')
   const [modelType, setModelType] = useState<ModelType | null>(null)
-  const [modelTouched, setModelTouched] = useState(false)
+  const [excluded, setExcluded] = useState<string[]>([])
+  const [testSize, setTestSize] = useState(0.2)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [name, setName] = useState('')
   const [dragging, setDragging] = useState(false)
   const [reading, setReading] = useState(false)
@@ -62,7 +67,7 @@ export default function UploadForm() {
       setName(f.name.replace(/\.(csv|txt)$/i, ''))
       setTargetColumn('') // force an explicit choice
       setModelType(null)
-      setModelTouched(false)
+      setExcluded([])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not read that file.')
     } finally {
@@ -72,11 +77,21 @@ export default function UploadForm() {
 
   const chooseTarget = (col: string) => {
     setTargetColumn(col)
-    const task = preview?.columns.find((c) => c.name === col)?.task
-    if (task && !modelTouched) {
-      setModelType(task === 'classification' ? 'random_forest_classifier' : 'random_forest_regressor')
-    }
+    setExcluded((cols) => cols.filter((c) => c !== col))
+    const suggested = preview?.columns.find((c) => c.name === col)?.task ?? 'classification'
+    setTask(suggested)
+    setModelType(AUTO_MODEL[suggested])
   }
+
+  const chooseTask = (t: Task) => {
+    setTask(t)
+    setModelType(AUTO_MODEL[t])
+  }
+
+  const toggleExcluded = (col: string) =>
+    setExcluded((cols) => (cols.includes(col) ? cols.filter((c) => c !== col) : [...cols, col]))
+
+  const featureCount = (preview?.columns.length ?? 0) - 1 - excluded.length
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -97,7 +112,7 @@ export default function UploadForm() {
       const { error: uploadError } = await supabase.storage
         .from('datasets')
         .upload(datasetPath, new Blob([file], { type: 'text/csv' }), { contentType: 'text/csv' })
-      if (uploadError) throw uploadError
+      if (uploadError) throw new Error(uploadError.message)
 
       // Create training job row
       const { error: insertError } = await supabase.from('training_jobs').insert({
@@ -106,8 +121,13 @@ export default function UploadForm() {
         dataset_path: datasetPath,
         target_column: targetColumn,
         model_type: modelType,
+        options: { exclude_columns: excluded, test_size: testSize },
       })
-      if (insertError) throw insertError
+      if (insertError) {
+        // Clean up the upload; quota messages from the database are already readable
+        await supabase.storage.from('datasets').remove([datasetPath])
+        throw new Error(insertError.message)
+      }
 
       router.push('/dashboard')
       router.refresh()
@@ -214,51 +234,69 @@ export default function UploadForm() {
 
       {preview && targetColumn && (
         <Step n={3} title="Choose a model">
-          <div className="grid gap-4 md:grid-cols-2">
-            {TASKS.map(({ task, title, blurb }) => (
-              <fieldset key={task} className={`space-y-2 ${suggestedTask && suggestedTask !== task ? 'opacity-60' : ''}`}>
-                <legend className="mb-2 text-xs text-zinc-500">
-                  <span className="font-medium text-zinc-300">{title}</span> · {blurb}
-                </legend>
-                {(Object.keys(MODEL_TYPES) as ModelType[])
-                  .filter((type) => MODEL_TYPES[type].task === task)
-                  .map((type) => {
-                    const info = MODEL_TYPES[type]
-                    const selected = modelType === type
-                    const recommended = suggestedTask === task && type.startsWith('random_forest')
-                    return (
-                      <label
-                        key={type}
-                        className={`flex cursor-pointer gap-3 rounded-xl border p-3.5 transition-colors ${
-                          selected ? 'border-zinc-400 bg-zinc-900' : 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-700'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="model"
-                          value={type}
-                          checked={selected}
-                          onChange={() => { setModelType(type); setModelTouched(true) }}
-                          className="mt-0.5 size-4 shrink-0 accent-zinc-100"
-                        />
-                        <span className="min-w-0">
-                          <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-100">
-                            {info.label}
-                            {recommended && (
-                              <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-px text-[10px] font-medium text-emerald-300">
-                                Recommended
-                              </span>
-                            )}
-                          </span>
-                          <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">{info.description}</span>
-                        </span>
-                      </label>
-                    )
-                  })}
-              </fieldset>
+          <div className="mb-4 flex gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1" role="radiogroup" aria-label="Task">
+            {TASKS.map((t) => (
+              <button
+                key={t.task}
+                type="button"
+                role="radio"
+                aria-checked={task === t.task}
+                onClick={() => chooseTask(t.task)}
+                className={`flex-1 rounded-md px-3 py-2 text-left transition-colors ${task === t.task ? 'bg-zinc-800' : 'hover:bg-zinc-900'}`}
+              >
+                <span className={`block text-sm font-medium ${task === t.task ? 'text-zinc-100' : 'text-zinc-400'}`}>
+                  {t.title}
+                  {suggestedTask === t.task && <span className="ml-2 text-[10px] font-normal text-emerald-300">suggested</span>}
+                </span>
+                <span className="mt-0.5 hidden text-xs text-zinc-500 sm:block">{t.blurb}</span>
+              </button>
             ))}
           </div>
-          {modelType && suggestedTask && MODEL_TYPES[modelType].task !== suggestedTask && (
+
+          <label className={`mb-3 flex cursor-pointer gap-3 rounded-xl border p-4 transition-colors ${
+            modelType === AUTO_MODEL[task] ? 'border-emerald-400/50 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-700'
+          }`}>
+            <input type="radio" name="model" value={AUTO_MODEL[task]} checked={modelType === AUTO_MODEL[task]}
+              onChange={() => setModelType(AUTO_MODEL[task])} className="mt-1 size-4 shrink-0 accent-emerald-400" />
+            <span className="min-w-0">
+              <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-100">
+                <WandIcon size={15} className="text-emerald-300" /> Auto: find the best model
+                <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-px text-[10px] font-medium text-emerald-300">Recommended</span>
+              </span>
+              <span className="mt-1 block text-xs leading-relaxed text-zinc-500">
+                Compares 7 algorithms with cross-validation and keeps the most accurate. Takes a little longer.
+              </span>
+            </span>
+          </label>
+
+          <p className="mb-2 text-xs text-zinc-500">Or choose an algorithm</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {(Object.keys(MODEL_TYPES) as ModelType[])
+              .filter((type) => MODEL_TYPES[type].task === task && !MODEL_TYPES[type].auto)
+              .map((type) => {
+                const info = MODEL_TYPES[type]
+                const selected = modelType === type
+                return (
+                  <label
+                    key={type}
+                    className={`flex cursor-pointer gap-3 rounded-xl border p-3.5 transition-colors ${
+                      selected ? 'border-zinc-400 bg-zinc-900' : 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-700'
+                    }`}
+                  >
+                    <input type="radio" name="model" value={type} checked={selected} onChange={() => setModelType(type)}
+                      className="mt-0.5 size-4 shrink-0 accent-zinc-100" />
+                    <span className="min-w-0">
+                      <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-100">
+                        {info.label}
+                        <span className="text-[10px] font-normal text-zinc-500">{SPEED[info.speed]}</span>
+                      </span>
+                      <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">{info.description}</span>
+                    </span>
+                  </label>
+                )
+              })}
+          </div>
+          {suggestedTask && task !== suggestedTask && (
             <p className="mt-3 flex items-center gap-2 text-xs text-amber-300">
               <AlertIcon size={14} />
               “{targetColumn}” looks like a {suggestedTask} target — training may fail or perform poorly.
@@ -268,24 +306,87 @@ export default function UploadForm() {
       )}
 
       {preview && targetColumn && modelType && (
-        <Step n={4} title="Name it and train">
+        <Step n={4} title="Options">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            aria-expanded={showAdvanced}
+            className="flex w-full items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 px-4 py-3 text-left text-sm text-zinc-300 transition-colors hover:border-zinc-700"
+          >
+            <span>
+              {featureCount} input column{featureCount === 1 ? '' : 's'} · {Math.round(testSize * 100)}% held out for testing
+            </span>
+            <span className="shrink-0 text-xs text-zinc-500">{showAdvanced ? 'Hide' : 'Customise'}</span>
+          </button>
+          {showAdvanced && (
+            <div className="mt-3 animate-fade-up space-y-5 rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+              <div>
+                <p className="label">Input columns</p>
+                <p className="mb-2.5 text-xs text-zinc-500">Click a column to leave it out, e.g. IDs or values you won’t know at prediction time.</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {preview.columns.filter((c) => c.name !== targetColumn).map((c) => {
+                    const off = excluded.includes(c.name)
+                    return (
+                      <button
+                        key={c.name}
+                        type="button"
+                        aria-pressed={!off}
+                        onClick={() => toggleExcluded(c.name)}
+                        className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors ${
+                          off ? 'border-zinc-800 text-zinc-600 line-through' : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-zinc-500'
+                        }`}
+                      >
+                        {c.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div>
+                <p className="label">Test split</p>
+                <p className="mb-2.5 text-xs text-zinc-500">Share of rows kept aside to measure accuracy honestly.</p>
+                <div className="flex gap-1.5" role="radiogroup" aria-label="Test split">
+                  {TEST_SPLITS.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      role="radio"
+                      aria-checked={testSize === v}
+                      onClick={() => setTestSize(v)}
+                      className={`h-9 flex-1 rounded-lg border font-mono text-xs transition-colors sm:flex-none sm:px-4 ${
+                        testSize === v ? 'border-zinc-300 bg-zinc-100 text-zinc-950' : 'border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                      }`}
+                    >
+                      {Math.round(v * 100)}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </Step>
+      )}
+
+      {preview && targetColumn && modelType && (
+        <Step n={5} title="Name it and train">
           <div className="flex flex-col gap-3 sm:flex-row">
             <input
               className="input sm:h-12"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Model name"
-              maxLength={80}
+              maxLength={120}
               aria-label="Model name"
             />
-            <button type="submit" disabled={loading} className="btn btn-primary btn-lg w-full sm:w-auto">
+            <button type="submit" disabled={loading || featureCount < 1} className="btn btn-primary btn-lg w-full sm:w-auto">
               {loading ? <Spinner /> : null}
               {loading ? 'Uploading…' : 'Train model'}
               {!loading && <ArrowRightIcon />}
             </button>
           </div>
           <p className="mt-3 text-xs text-zinc-500">
-            Training usually takes a few seconds. The uploaded file is deleted as soon as training finishes.
+            {MODEL_TYPES[modelType].auto ? 'Auto mode usually takes under a minute.' : 'Training usually takes a few seconds.'}{' '}
+            The uploaded file is deleted as soon as training finishes.
           </p>
         </Step>
       )}

@@ -1,35 +1,116 @@
-import type { Metrics, ModelType } from '@/types'
+import type { Metrics, ModelType, TrainingJob } from '@/types'
 
 export type Task = 'classification' | 'regression'
+export type Speed = 'fast' | 'medium' | 'slow'
 
-export const MODEL_TYPES: Record<ModelType, { label: string; task: Task; description: string }> = {
+interface ModelInfo {
+  label: string
+  task: Task
+  description: string
+  speed: Speed
+  auto?: boolean
+}
+
+// Keep in sync with MODELS in model.py
+export const MODEL_TYPES: Record<ModelType, ModelInfo> = {
+  auto_classifier: {
+    label: 'Auto', task: 'classification', speed: 'slow', auto: true,
+    description: 'Tries 7 algorithms with cross-validation and keeps the best one.',
+  },
+  gradient_boosting_classifier: {
+    label: 'Gradient Boosting', task: 'classification', speed: 'medium',
+    description: 'Usually the most accurate on tabular data. Handles missing values well.',
+  },
   random_forest_classifier: {
-    label: 'Random Forest',
-    task: 'classification',
-    description: 'Strong default. Captures non-linear patterns and feature interactions.',
+    label: 'Random Forest', task: 'classification', speed: 'medium',
+    description: 'Robust default. Captures non-linear patterns and feature interactions.',
+  },
+  extra_trees_classifier: {
+    label: 'Extra Trees', task: 'classification', speed: 'medium',
+    description: 'Like Random Forest with more randomness: fast and resistant to overfitting.',
   },
   logistic_regression: {
-    label: 'Logistic Regression',
-    task: 'classification',
+    label: 'Logistic Regression', task: 'classification', speed: 'fast',
     description: 'Fast and interpretable. Best when classes separate roughly linearly.',
   },
+  decision_tree_classifier: {
+    label: 'Decision Tree', task: 'classification', speed: 'fast',
+    description: 'A single tree of if/else rules: easy to explain, less accurate.',
+  },
+  knn_classifier: {
+    label: 'k-Nearest Neighbours', task: 'classification', speed: 'medium',
+    description: 'Predicts from the most similar training rows. Good for small datasets.',
+  },
+  svm_classifier: {
+    label: 'Support Vector Machine', task: 'classification', speed: 'slow',
+    description: 'Strong on small, clean datasets. Slow above ~10k rows.',
+  },
+  naive_bayes_classifier: {
+    label: 'Naive Bayes', task: 'classification', speed: 'fast',
+    description: 'Very fast probabilistic baseline. Assumes features are independent.',
+  },
+  auto_regressor: {
+    label: 'Auto', task: 'regression', speed: 'slow', auto: true,
+    description: 'Tries 7 algorithms with cross-validation and keeps the best one.',
+  },
+  gradient_boosting_regressor: {
+    label: 'Gradient Boosting', task: 'regression', speed: 'medium',
+    description: 'Usually the most accurate on tabular data. Handles missing values well.',
+  },
   random_forest_regressor: {
-    label: 'Random Forest',
-    task: 'regression',
-    description: 'Strong default. Handles non-linear relationships without tuning.',
+    label: 'Random Forest', task: 'regression', speed: 'medium',
+    description: 'Robust default. Handles non-linear relationships without tuning.',
+  },
+  extra_trees_regressor: {
+    label: 'Extra Trees', task: 'regression', speed: 'medium',
+    description: 'Like Random Forest with more randomness: fast and resistant to overfitting.',
+  },
+  ridge_regression: {
+    label: 'Ridge Regression', task: 'regression', speed: 'fast',
+    description: 'Linear model with regularisation; stable when features are correlated.',
+  },
+  lasso_regression: {
+    label: 'Lasso Regression', task: 'regression', speed: 'fast',
+    description: 'Linear model that drops unhelpful features automatically.',
   },
   linear_regression: {
-    label: 'Linear Regression',
-    task: 'regression',
+    label: 'Linear Regression', task: 'regression', speed: 'fast',
     description: 'Simple baseline. Best when the target grows linearly with features.',
   },
+  decision_tree_regressor: {
+    label: 'Decision Tree', task: 'regression', speed: 'fast',
+    description: 'A single tree of if/else rules: easy to explain, less accurate.',
+  },
+  knn_regressor: {
+    label: 'k-Nearest Neighbours', task: 'regression', speed: 'medium',
+    description: 'Averages the most similar training rows. Good for small datasets.',
+  },
+  svm_regressor: {
+    label: 'Support Vector Machine', task: 'regression', speed: 'slow',
+    description: 'Strong on small, clean datasets. Slow above ~10k rows.',
+  },
+}
+
+export const AUTO_MODEL: Record<Task, ModelType> = {
+  classification: 'auto_classifier',
+  regression: 'auto_regressor',
 }
 
 export const isClassification = (type: ModelType) => MODEL_TYPES[type]?.task === 'classification'
 
 export function modelLabel(type: ModelType) {
   const info = MODEL_TYPES[type]
-  return info ? `${info.label} ${info.task === 'classification' ? 'classifier' : 'regressor'}` : type
+  if (!info) return type
+  if (info.auto) return `Auto ${info.task === 'classification' ? 'classifier' : 'regressor'}`
+  return `${info.label} ${info.task === 'classification' ? 'classifier' : 'regressor'}`
+}
+
+/** "Auto → Gradient Boosting" once an Auto job has picked its winner */
+export function jobModelLabel(job: Pick<TrainingJob, 'model_type' | 'report'>) {
+  if (MODEL_TYPES[job.model_type]?.auto && job.report?.model_label) {
+    return `Auto → ${job.report.model_label}`
+  }
+  return modelLabel(job.model_type)
 }
 
 export interface MetricItem {
@@ -65,6 +146,13 @@ export function metricItems(type: ModelType, metrics: Metrics | null): MetricIte
   return items
 }
 
+/** Cross-validated score, e.g. "0.812 ± 0.021" */
+export function cvSummary(metrics: Metrics | null) {
+  const m = metrics as { cv_score?: number; cv_std?: number } | null
+  if (typeof m?.cv_score !== 'number') return null
+  return `${m.cv_score.toFixed(3)} ± ${(m.cv_std ?? 0).toFixed(3)}`
+}
+
 export function formatRelative(date: string) {
   // Clamp to the past: a machine with a slow clock would otherwise show "in 5 hours"
   const seconds = Math.min(0, (new Date(date).getTime() - Date.now()) / 1000)
@@ -77,6 +165,12 @@ export function formatRelative(date: string) {
     if (Math.abs(seconds) >= size) return rtf.format(Math.round(seconds / size), unit)
   }
   return 'just now'
+}
+
+export function formatDuration(seconds: number) {
+  if (seconds < 1) return '<1s'
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
 }
 
 export function displayName(datasetName: string) {

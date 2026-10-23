@@ -5,21 +5,27 @@ import threading
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import httpx
 import joblib
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
+from security import Authenticator, Identity, RateLimiter
 from supabase_utils import create_supabase, ensure_runtime_bucket, publish_status
+from usage import UsageRecorder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("modelfoundry.api")
 
 supabase = create_supabase()
+authenticator = Authenticator(supabase)
+rate_limiter = RateLimiter()
+usage = UsageRecorder(supabase)
 
 # Set by docker-compose: where the cloudflared sidecar exposes its metrics server
 TUNNEL_METRICS_URL = os.getenv("TUNNEL_METRICS_URL")
@@ -29,11 +35,16 @@ HEARTBEAT_SECONDS = 60
 
 MODEL_CACHE_DIR = "./cached_models"
 MAX_MODELS_IN_MEMORY = 20
-JOB_CACHE_SECONDS = 60
-PUBLIC_JOB_FIELDS = "id,dataset_name,target_column,model_type,status,metrics,features,created_at"
+JOB_CACHE_SECONDS = 30
+MAX_BODY_BYTES = 2 * 1024 * 1024
+MAX_FEATURES = 500
+MAX_BATCH_ROWS = 1000
+MAX_CONCURRENT_PREDICTIONS = 8
+JOB_FIELDS = "id,user_id,dataset_name,target_column,model_type,status,is_public,metrics,features,report,created_at"
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+prediction_slots = threading.BoundedSemaphore(MAX_CONCURRENT_PREDICTIONS)
 
 
 # ----------------------------------------------------------------------
@@ -93,8 +104,10 @@ async def lifespan(_: FastAPI):
         announcer.start()
     else:
         log.info("No tunnel configured — API is only reachable locally.")
+    usage.start()
     yield
     stop.set()
+    usage.stop()
     if announcer:
         announcer.join(timeout=10)
 
@@ -110,8 +123,20 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def limit_body_size(request: Request, call_next):
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > MAX_BODY_BYTES:
+        return JSONResponse({"detail": "Request body too large (max 2 MB)"}, status_code=413)
+    return await call_next(request)
+
+
 class PredictionRequest(BaseModel):
-    features: Dict[str, Any]
+    features: Dict[str, Any] = Field(max_length=MAX_FEATURES)
+
+
+class BatchPredictionRequest(BaseModel):
+    rows: List[Dict[str, Any]] = Field(min_length=1, max_length=MAX_BATCH_ROWS)
 
 
 # ----------------------------------------------------------------------
@@ -128,7 +153,7 @@ def require_supabase():
     return supabase
 
 
-def get_ready_job(model_id: str) -> dict:
+def get_ready_job(model_id: str, identity: Optional[Identity]) -> dict:
     if not UUID_RE.match(model_id):
         raise HTTPException(status_code=404, detail="Model not found")
 
@@ -136,7 +161,7 @@ def get_ready_job(model_id: str) -> dict:
     if cached and time.time() - cached[0] < JOB_CACHE_SECONDS:
         job = cached[1]
     else:
-        res = require_supabase().table("training_jobs").select(PUBLIC_JOB_FIELDS).eq("id", model_id).limit(1).execute()
+        res = require_supabase().table("training_jobs").select(JOB_FIELDS).eq("id", model_id).limit(1).execute()
         job = res.data[0] if res.data else None
         _jobs[model_id] = (time.time(), job)
 
@@ -148,6 +173,12 @@ def get_ready_job(model_id: str) -> dict:
         if not job and os.path.exists(local_path):
             os.remove(local_path)
         raise HTTPException(status_code=404, detail="Model not found or not ready yet")
+
+    if not job.get("is_public", True):
+        if identity is None:
+            raise HTTPException(status_code=401, detail="This model is private. Send an API key in the X-API-Key header.")
+        if identity.user_id != job["user_id"]:
+            raise HTTPException(status_code=404, detail="Model not found or not ready yet")
     return job
 
 
@@ -179,36 +210,72 @@ def get_model(model_id: str):
     return pipeline
 
 
-# ----------------------------------------------------------------------
-# Routes
-# ----------------------------------------------------------------------
-@app.get("/api/v1/models/{model_id}")
-def model_info(model_id: str):
-    """Public details of a trained model (used by the shareable predictor page)."""
-    job = get_ready_job(model_id)
-    return {k: v for k, v in job.items() if k != "status"}
-
-
-@app.post("/api/v1/models/{model_id}/predict")
-def predict(model_id: str, request: PredictionRequest):
-    """
-    Returns a prediction for a given model ID.
-    """
-    get_ready_job(model_id)
+def run_prediction(request: Request, model_id: str, rows: int, source: str, predict):
+    """Shared path for single and batch predictions: auth, limits, timing, usage."""
+    identity = authenticator.identify(request)
+    rate_limiter.limit(request, identity, cost=max(1.0, rows / 50))  # batches cost 1 per 50 rows
+    get_ready_job(model_id, identity)
     pipeline = get_model(model_id)
 
+    if not prediction_slots.acquire(timeout=10):
+        raise HTTPException(status_code=503, detail="The prediction server is busy. Try again shortly.")
+    started = time.perf_counter()
+    ok = False
     try:
-        return pipeline.predict_one(request.features)
+        result = predict(pipeline)
+        ok = True
+        return result
     except (ValueError, TypeError, KeyError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid input: {e}")
     except Exception as e:
         log.exception("Prediction failed for %s", model_id)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        prediction_slots.release()
+        usage.record(model_id, source, rows, int((time.perf_counter() - started) * 1000), ok)
+
+
+# ----------------------------------------------------------------------
+# Routes
+# ----------------------------------------------------------------------
+@app.get("/api/v1/models/{model_id}")
+def model_info(model_id: str, request: Request):
+    """Public details of a trained model (used by the shareable predictor page)."""
+    identity = authenticator.identify(request)
+    rate_limiter.limit(request, identity)
+    job = get_ready_job(model_id, identity)
+    return {k: v for k, v in job.items() if k not in ("status", "user_id")}
+
+
+@app.post("/api/v1/models/{model_id}/predict")
+def predict(model_id: str, body: PredictionRequest, request: Request):
+    """
+    Returns a prediction for a given model ID.
+    """
+    source = request.headers.get("x-modelfoundry-source", "api")
+    return run_prediction(request, model_id, 1, source, lambda p: p.predict_one(body.features))
+
+
+@app.post("/api/v1/models/{model_id}/predict/batch")
+def predict_batch(model_id: str, body: BatchPredictionRequest, request: Request):
+    """Predicts up to 1,000 rows at once. Returns one result per row, in order."""
+    return run_prediction(request, model_id, len(body.rows), "batch",
+                          lambda p: {"predictions": p.predict_many(body.rows)})
 
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/ready")
+def readiness():
+    """Ready when Supabase is configured and reachable."""
+    try:
+        require_supabase().table("training_jobs").select("id").limit(1).execute()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Supabase unreachable: {e}")
+    return {"status": "ready"}
 
 
 if __name__ == "__main__":

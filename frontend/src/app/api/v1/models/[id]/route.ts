@@ -1,16 +1,22 @@
-import { BackendOfflineError, getPublicModel } from '@/lib/backend'
+import { BackendOfflineError, fetchModelInfo } from '@/lib/backend'
+import { CORS_HEADERS, forwardedHeaders, rateLimited } from '@/lib/proxy-request'
 
-// GET https://<your-site>/api/v1/models/<id> — model details and the input schema
+// GET https://<your-site>/api/v1/models/<id> — model details, metrics and the input schema
 
-export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
+export function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS })
+}
+
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const limited = rateLimited(request)
+  if (limited) return limited
   const { id } = await params
-  const headers = { 'Access-Control-Allow-Origin': '*' }
   try {
-    const model = await getPublicModel(id)
-    if (!model) return Response.json({ detail: 'Model not found or not ready yet' }, { status: 404, headers })
-    return Response.json(model, { headers })
+    const model = await fetchModelInfo(id, await forwardedHeaders(request))
+    if (!model) return Response.json({ detail: 'Model not found or not ready yet' }, { status: 404, headers: CORS_HEADERS })
+    return Response.json(model, { headers: CORS_HEADERS })
   } catch (e) {
-    if (e instanceof BackendOfflineError) return Response.json({ detail: e.message }, { status: 503, headers })
+    if (e instanceof BackendOfflineError) return Response.json({ detail: e.message }, { status: 503, headers: CORS_HEADERS })
     throw e
   }
 }

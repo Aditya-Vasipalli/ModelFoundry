@@ -2,19 +2,22 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { BackendOfflineError, getPublicModel } from '@/lib/backend'
-import { displayName, isClassification, modelLabel } from '@/lib/models'
+import { sessionToken } from '@/lib/proxy-request'
+import { displayName, isClassification, jobModelLabel, modelLabel } from '@/lib/models'
 import type { PublicModel } from '@/types'
 import { Logo, MetricGrid, StatusBadge } from '@/components/ui'
 import { ArrowRightIcon, ServerIcon } from '@/components/icons'
 import PredictionForm from '@/components/PredictionForm'
+import { FeatureImportanceChart } from '@/components/charts'
 
 type Props = { params: Promise<{ id: string }> }
 
 // Anonymous visitors can't read training_jobs (row-level security), so the
-// shared page gets the model's public details from the backend instead.
+// shared page gets the model's public details from the backend instead. The
+// viewer's session (if any) is passed along so owners can open private models.
 async function loadModel(id: string): Promise<{ model: PublicModel | null; offline: boolean }> {
   try {
-    return { model: await getPublicModel(id), offline: false }
+    return { model: await getPublicModel(id, await sessionToken()), offline: false }
   } catch (e) {
     if (e instanceof BackendOfflineError) return { model: null, offline: true }
     throw e
@@ -56,7 +59,7 @@ export default async function PublicModelPage({ params }: Props) {
                 <StatusBadge status="ready" label="Live" />
               </div>
               <p className="mt-2 text-sm text-zinc-500">
-                {modelLabel(model.model_type)} that predicts <span className="text-zinc-200">{model.target_column}</span>
+                {jobModelLabel(model)} that predicts <span className="text-zinc-200">{model.target_column}</span>
               </p>
             </div>
             <MetricGrid type={model.model_type} metrics={model.metrics} />
@@ -66,7 +69,17 @@ export default async function PublicModelPage({ params }: Props) {
               features={model.features}
               targetColumn={model.target_column}
               backendOnline
+              source="share"
             />
+            {model.report?.feature_importance && model.report.feature_importance.length > 0 && (
+              <section className="card p-5 sm:p-6">
+                <h2 className="text-sm font-semibold text-zinc-100">What drives the prediction</h2>
+                <p className="mt-1 text-xs text-zinc-500">How much the model relies on each input.</p>
+                <div className="mt-4">
+                  <FeatureImportanceChart items={model.report.feature_importance.slice(0, 8)} />
+                </div>
+              </section>
+            )}
           </div>
         ) : (
           <div className="card mx-auto flex max-w-md flex-col items-center px-6 py-14 text-center">

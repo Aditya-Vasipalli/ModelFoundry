@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getUser } from '@/utils/supabase/server'
 import { Logo } from '@/components/ui'
-import { LogOutIcon } from '@/components/icons'
+import { LogOutIcon, SettingsIcon } from '@/components/icons'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const user = await getUser()
@@ -25,10 +25,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
               <Link href="/dashboard/upload" className="rounded-md px-2.5 py-1.5 text-zinc-400 transition-colors hover:text-zinc-100">
                 New model
               </Link>
+              <Link href="/dashboard/settings" className="rounded-md px-2.5 py-1.5 text-zinc-400 transition-colors hover:text-zinc-100">
+                API keys
+              </Link>
+              <Link href="/docs" className="rounded-md px-2.5 py-1.5 text-zinc-400 transition-colors hover:text-zinc-100">
+                Docs
+              </Link>
             </nav>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-3">
-            <span className="hidden max-w-56 truncate text-sm text-zinc-500 md:inline">{user.email}</span>
+            <Link href="/dashboard/settings" className="btn btn-ghost btn-sm btn-icon w-8 sm:hidden" aria-label="Settings">
+              <SettingsIcon size={15} />
+            </Link>
+            <span className="hidden max-w-56 truncate text-sm text-zinc-500 lg:inline">{user.email}</span>
             {avatar ? (
               <Image src={avatar} alt="" width={28} height={28} className="size-7 rounded-full border border-zinc-800" />
             ) : (

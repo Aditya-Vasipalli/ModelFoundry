@@ -10,6 +10,8 @@ interface PredictionFormProps {
   features: FeatureSchema[] | null
   targetColumn: string
   backendOnline: boolean
+  /** Where the form is shown, for usage stats */
+  source?: 'web' | 'share'
 }
 
 function initialValues(features: FeatureSchema[]) {
@@ -35,7 +37,7 @@ function formatRange(f: FeatureSchema) {
   return `Trained on ${fmt(f.min)} – ${fmt(f.max)}`
 }
 
-export default function PredictionForm({ modelId, isClassification, features, targetColumn, backendOnline }: PredictionFormProps) {
+export default function PredictionForm({ modelId, isClassification, features, targetColumn, backendOnline, source = 'web' }: PredictionFormProps) {
   const [inputs, setInputs] = useState<Record<string, string>>(() => initialValues(features ?? []))
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<PredictionResult | null>(null)
@@ -67,7 +69,7 @@ export default function PredictionForm({ modelId, isClassification, features, ta
     try {
       const res = await fetch(`/api/v1/models/${modelId}/predict`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-ModelFoundry-Source': source },
         body: JSON.stringify({ features: payload }),
       })
       const data = await res.json().catch(() => null)

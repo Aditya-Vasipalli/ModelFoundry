@@ -1,0 +1,20 @@
+name: Keep alive
+
+# Free Supabase projects are paused after a week without traffic. Pinging the
+# site's health endpoint daily queries the database and keeps it awake; it also
+# doubles as a basic uptime check.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the health endpoint
+        env:
+          SITE_URL: ${{ vars.SITE_URL || 'https://model-foundry-ten.vercel.app' }}
+        run: |
+          curl --fail-with-body --silent --show-error --retry 3 --retry-delay 20 "$SITE_URL/api/health"

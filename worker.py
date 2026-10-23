@@ -1,14 +1,11 @@
-import csv
 import logging
 import os
+import signal
 import time
-import traceback
 from datetime import datetime, timedelta, timezone
 
-import pandas as pd
-
-from model import train_and_evaluate
 from supabase_utils import create_supabase, ensure_runtime_bucket, publish_status
+from training import run_training
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("modelfoundry.worker")
@@ -16,9 +13,27 @@ log = logging.getLogger("modelfoundry.worker")
 POLL_SECONDS = 3
 HEARTBEAT_SECONDS = 60
 CLEANUP_SECONDS = 600
+MAX_ATTEMPTS = 3
+TRAINING_TIMEOUT = int(os.getenv("TRAINING_TIMEOUT_SECONDS", "900"))
+USAGE_RETENTION_DAYS = 90
+HEALTH_FILE = os.getenv("WORKER_HEALTH_FILE", "/tmp/worker-heartbeat")
 
 # Initialize Supabase Client
 supabase = create_supabase()
+stopping = False
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def touch_health_file():
+    """Docker's healthcheck reads this file's age to tell whether the loop is alive."""
+    try:
+        with open(HEALTH_FILE, "w") as f:
+            f.write(now_iso())
+    except OSError:
+        pass
 
 
 def heartbeat(busy_job: str | None = None):
@@ -28,22 +43,8 @@ def heartbeat(busy_job: str | None = None):
         log.warning("Heartbeat failed: %s", e)
 
 
-def read_dataset(path: str) -> pd.DataFrame:
-    """Reads a CSV, detecting the delimiter (, ; tab |) and tolerating BOMs / non-UTF8 files."""
-    for encoding in ("utf-8-sig", "latin-1"):
-        try:
-            with open(path, newline="", encoding=encoding) as f:
-                sample = f.read(64 * 1024)
-            try:
-                sep = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
-            except csv.Error:
-                sep = ","
-            df = pd.read_csv(path, sep=sep, encoding=encoding)
-            df.columns = [str(c).strip() for c in df.columns]
-            return df
-        except UnicodeDecodeError:
-            continue
-    raise ValueError("Could not read the file as CSV text.")
+def update_job(job_id, fields):
+    return supabase.table("training_jobs").update(fields).eq("id", job_id).execute()
 
 
 def process_job(job):
@@ -52,97 +53,156 @@ def process_job(job):
     """
     job_id = job['id']
     dataset_path = job['dataset_path']  # Path in Supabase Storage
-    target_column = job['target_column'].strip()
-    model_type = job['model_type']
+    attempt = (job.get('attempts') or 0) + 1
 
-    # Claim the job; if it was deleted in the meantime there is nothing to do
-    claimed = supabase.table("training_jobs").update({"status": "processing", "error_message": None}) \
-        .eq("id", job_id).eq("status", "pending").execute()
+    # Claim the job; if it was deleted or cancelled in the meantime there is nothing to do
+    claimed = supabase.table("training_jobs").update({
+        "status": "processing",
+        "error_message": None,
+        "attempts": attempt,
+        "started_at": now_iso(),
+        "progress": {"stage": "queued", "message": "Downloading the dataset", "percent": 2},
+    }).eq("id", job_id).eq("status", "pending").execute()
     if not claimed.data:
         return
 
-    log.info("Processing job %s (%s, target=%s)", job_id, model_type, target_column)
+    log.info("Processing job %s (%s, target=%s, attempt %d)", job_id, job['model_type'], job['target_column'], attempt)
     heartbeat(busy_job=job_id)
 
     local_dataset_path = f"./temp_{job_id}.csv"
     local_model_path = None
+    retrying = False
+    last_progress = [0.0]
+    last_heartbeat = [time.time()]
+
+    def on_progress(p):
+        # Throttle database writes; always send the final stages
+        if time.time() - last_progress[0] > 1.5 or p["percent"] >= 90:
+            last_progress[0] = time.time()
+            try:
+                update_job(job_id, {"progress": p})
+            except Exception as e:
+                log.debug("Progress update failed: %s", e)
+
+    def on_tick():
+        touch_health_file()
+        if time.time() - last_heartbeat[0] > HEARTBEAT_SECONDS:
+            last_heartbeat[0] = time.time()
+            heartbeat(busy_job=job_id)
+
+    def should_cancel():
+        try:
+            res = supabase.table("training_jobs").select("status").eq("id", job_id).limit(1).execute()
+            return not res.data or res.data[0]["status"] == "cancelled"
+        except Exception:
+            return False
 
     try:
         # 1. Download dataset
-        res = supabase.storage.from_("datasets").download(dataset_path)
+        try:
+            data = supabase.storage.from_("datasets").download(dataset_path)
+        except Exception as e:
+            if "not found" in str(e).lower() or "404" in str(e):
+                raise ValueError("The uploaded dataset is missing. Please upload it again.")
+            raise
         with open(local_dataset_path, "wb") as f:
-            f.write(res)
+            f.write(data)
 
-        # 2. Load dataset
-        df = read_dataset(local_dataset_path)
-        if target_column not in df.columns:
-            raise ValueError(f"Target column '{target_column}' not found in dataset.")
-        if df.shape[1] < 2:
-            raise ValueError("The dataset needs at least one feature column besides the target.")
+        # 2. Train in an isolated process
+        outcome = run_training(
+            local_dataset_path, job['target_column'].strip(), job['model_type'], str(job_id),
+            options=job.get('options') or {}, timeout=TRAINING_TIMEOUT,
+            on_progress=on_progress, should_cancel=should_cancel, on_tick=on_tick,
+        )
 
-        y = df[target_column]
-        X = df.drop(columns=[target_column])
+        if outcome.kind == "done":
+            local_model_path, metrics, features_schema, report = outcome.result
 
-        # 3. Train Model
-        local_model_path, metrics, features_schema = train_and_evaluate(X, y, model_type, str(job_id))
+            # 3. Upload Model to Supabase Storage
+            remote_model_path = f"{job_id}.joblib"
+            with open(local_model_path, "rb") as f:
+                supabase.storage.from_("models").upload(
+                    remote_model_path,
+                    f.read(),
+                    file_options={"content-type": "application/octet-stream", "upsert": "true"},
+                )
 
-        # 4. Upload Model to Supabase Storage
-        remote_model_path = f"{job_id}.joblib"
-        with open(local_model_path, "rb") as f:
-            supabase.storage.from_("models").upload(
-                remote_model_path,
-                f.read(),
-                file_options={"content-type": "application/octet-stream", "upsert": "true"},
-            )
+            # 4. Update Database
+            update_job(job_id, {
+                "status": "ready",
+                "metrics": metrics,
+                "report": report,
+                "model_path": remote_model_path,
+                "features": features_schema,
+                "error_message": None,
+                "progress": {"stage": "done", "message": "Ready", "percent": 100},
+                "finished_at": now_iso(),
+            })
+            log.info("Job %s completed: %s", job_id, metrics)
 
-        # 5. Update Database
-        supabase.table("training_jobs").update({
-            "status": "ready",
-            "metrics": metrics,
-            "model_path": remote_model_path,
-            "features": features_schema,
-            "error_message": None,
-        }).eq("id", job_id).execute()
+        elif outcome.kind == "cancelled":
+            update_job(job_id, {"finished_at": now_iso(), "progress": None})
+            log.info("Job %s cancelled", job_id)
 
-        log.info("Job %s completed: %s", job_id, metrics)
+        elif outcome.kind == "error" and attempt < MAX_ATTEMPTS:
+            retrying = True
+            update_job(job_id, {
+                "status": "pending",
+                "progress": None,
+                "error_message": f"Retrying after an error (attempt {attempt} of {MAX_ATTEMPTS}): {outcome.message}"[:500],
+            })
+            log.warning("Job %s failed, will retry: %s", job_id, outcome.message)
+
+        else:  # user_error, timeout, or out of retries
+            update_job(job_id, {
+                "status": "failed",
+                "error_message": outcome.message[:500],
+                "progress": None,
+                "finished_at": now_iso(),
+            })
+            log.warning("Job %s failed: %s", job_id, outcome.message)
 
     except Exception as e:
+        user_error = isinstance(e, ValueError)
+        retrying = not user_error and attempt < MAX_ATTEMPTS
         log.error("Error processing job %s: %s", job_id, e)
-        traceback.print_exc()
         try:
-            supabase.table("training_jobs").update({
-                "status": "failed",
+            update_job(job_id, {
+                "status": "pending" if retrying else "failed",
                 "error_message": str(e)[:500],
-            }).eq("id", job_id).execute()
+                "progress": None,
+                "finished_at": None if retrying else now_iso(),
+            })
         except Exception as db_e:
-            log.error("Failed to update job status to failed: %s", db_e)
+            log.error("Failed to update job status: %s", db_e)
 
     finally:
-        # Privacy: the uploaded dataset is never kept, whether training worked or not
-        try:
-            supabase.storage.from_("datasets").remove([dataset_path])
-        except Exception as e:
-            log.warning("Could not delete dataset %s: %s", dataset_path, e)
-        if os.path.exists(local_dataset_path):
-            os.remove(local_dataset_path)
-        if local_model_path and os.path.exists(local_model_path):
-            os.remove(local_model_path)
+        # Privacy: the uploaded dataset is deleted once the job is finished, whatever the outcome
+        if not retrying:
+            try:
+                supabase.storage.from_("datasets").remove([dataset_path])
+            except Exception as e:
+                log.warning("Could not delete dataset %s: %s", dataset_path, e)
+        for path in (local_dataset_path, local_model_path):
+            if path and os.path.exists(path):
+                os.remove(path)
         heartbeat()
 
 
 def reset_interrupted_jobs():
     """Jobs left 'processing' by a previous run (crash / docker stop) go back in the queue."""
-    res = supabase.table("training_jobs").update({"status": "pending"}).eq("status", "processing").execute()
+    res = supabase.table("training_jobs").update({"status": "pending", "progress": None}) \
+        .eq("status", "processing").execute()
     if res.data:
         log.info("Re-queued %d interrupted job(s)", len(res.data))
 
 
 def cleanup_orphans():
     """
-    Removes model files whose job was deleted from the dashboard, and datasets
-    that no queued job refers to (e.g. a job deleted before it was trained).
+    Removes model files whose job was deleted from the dashboard, datasets that no
+    queued job refers to, and usage records past the retention period.
     """
-    jobs = supabase.table("training_jobs").select("id,dataset_path,status").execute().data
+    jobs = supabase.table("training_jobs").select("id,dataset_path,status").limit(10000).execute().data
     job_ids = {j["id"] for j in jobs}
     queued = {j["dataset_path"] for j in jobs if j["status"] in ("pending", "processing")}
 
@@ -170,6 +230,15 @@ def cleanup_orphans():
         supabase.storage.from_("datasets").remove(orphan_datasets)
         log.info("Removed %d orphaned dataset(s)", len(orphan_datasets))
 
+    retention_cutoff = (datetime.now(timezone.utc) - timedelta(days=USAGE_RETENTION_DAYS)).isoformat()
+    supabase.table("prediction_events").delete().lt("created_at", retention_cutoff).execute()
+
+
+def handle_stop(signum, frame):
+    global stopping
+    stopping = True
+    log.info("Stop requested; finishing up")
+
 
 def run_worker():
     log.info("Starting ML Worker...")
@@ -177,6 +246,8 @@ def run_worker():
         log.error("Supabase client not initialized. Exiting.")
         return
 
+    signal.signal(signal.SIGTERM, handle_stop)
+    signal.signal(signal.SIGINT, handle_stop)
     ensure_runtime_bucket(supabase)
     try:
         reset_interrupted_jobs()
@@ -184,7 +255,8 @@ def run_worker():
         log.warning("Could not re-queue interrupted jobs: %s", e)
 
     last_heartbeat = last_cleanup = 0.0
-    while True:
+    while not stopping:
+        touch_health_file()
         try:
             if time.time() - last_heartbeat >= HEARTBEAT_SECONDS:
                 heartbeat()
@@ -197,9 +269,9 @@ def run_worker():
                 except Exception as e:
                     log.warning("Cleanup failed: %s", e)
 
-            # Poll for the oldest pending job
+            # Fresh jobs first, then retries (oldest first within each)
             response = supabase.table("training_jobs").select("*").eq("status", "pending") \
-                .order("created_at").limit(1).execute()
+                .order("attempts").order("created_at").limit(1).execute()
 
             if response.data:
                 process_job(response.data[0])
@@ -210,6 +282,12 @@ def run_worker():
         except Exception as e:
             log.warning("Worker encountered an error while polling: %s", e)
             time.sleep(10)  # Sleep on error to prevent rapid failure loop
+
+    try:
+        publish_status(supabase, "worker", {"online": False, "busy": False})
+    except Exception:
+        pass
+    log.info("Worker stopped")
 
 
 if __name__ == "__main__":
